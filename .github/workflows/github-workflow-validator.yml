@@ -35,7 +35,7 @@ jobs:
           echo "$ISSUES" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
       - name: Comment workflow validator results
-        uses: thollander/actions-comment-pull-request@v2
+        uses: thollander/actions-comment-pull-request@v3
         if:  ${{ (github.ref != 'refs/heads/main') }}
         with:
           message: |
