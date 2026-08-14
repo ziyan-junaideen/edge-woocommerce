@@ -42,13 +42,6 @@ class WC_Edge_Payments {
 	 * Plugin bootstrapping.
 	 */
 	public static function init() {
-		// Composer dependencies must be present before anything else is registered.
-		if ( ! self::load_dependencies() ) {
-			add_action( 'admin_notices', array( __CLASS__, 'render_missing_dependencies_notice' ) );
-
-			return;
-		}
-
 		// Edge Payments gateway class.
 		add_action( 'plugins_loaded', array( __CLASS__, 'includes' ), 0 );
 
@@ -97,55 +90,10 @@ class WC_Edge_Payments {
 	 * @return void
 	 */
 	public static function activate() {
-		if ( ! self::load_dependencies() ) {
-			return;
-		}
-
 		require_once self::plugin_abspath() . 'includes/class-wc-edge-attempt-store.php';
 
 		WC_Edge_Attempt_Store::install();
 		update_option( WC_Edge_Attempt_Store::SCHEMA_OPTION, WC_Edge_Attempt_Store::SCHEMA_VERSION );
-	}
-
-	/**
-	 * Load the Composer autoloader.
-	 *
-	 * `vendor/` is a build artifact and is not committed, so a checkout without
-	 * `composer install` is a normal state rather than an exceptional one. Failing
-	 * soft here keeps that from taking the whole site down.
-	 *
-	 * @return bool Whether the Edge SDK is available.
-	 */
-	private static function load_dependencies() {
-		if ( class_exists( '\Edge\Client' ) ) {
-			return true;
-		}
-
-		$autoload = self::plugin_abspath() . 'vendor/autoload.php';
-
-		if ( ! is_readable( $autoload ) ) {
-			return false;
-		}
-
-		require_once $autoload;
-
-		return class_exists( '\Edge\Client' );
-	}
-
-	/**
-	 * Tell the administrator why the gateway did not load.
-	 */
-	public static function render_missing_dependencies_notice() {
-		if ( ! current_user_can( 'activate_plugins' ) ) {
-			return;
-		}
-
-		echo '<div class="notice notice-error"><p>';
-		echo esc_html__(
-			'Edge Payments Gateway could not start because its dependencies are missing. Run "composer install" in the plugin directory.',
-			'edge-gateway'
-		);
-		echo '</p></div>';
 	}
 
 	/**
@@ -170,6 +118,9 @@ class WC_Edge_Payments {
 
 		require_once $path . 'class-wc-edge-money.php';
 		require_once $path . 'class-wc-edge-mode.php';
+		require_once $path . 'class-wc-edge-countries.php';
+		require_once $path . 'class-wc-edge-api-exception.php';
+		require_once $path . 'class-wc-edge-api-client.php';
 		require_once $path . 'class-wc-edge-client-factory.php';
 		require_once $path . 'class-wc-edge-attempt-store.php';
 		require_once $path . 'class-wc-edge-fingerprint.php';

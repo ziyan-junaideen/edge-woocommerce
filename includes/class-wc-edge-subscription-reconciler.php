@@ -137,29 +137,37 @@ final class WC_Edge_Subscription_Reconciler {
 		}
 
 		try {
-			WC_Edge_Client_Factory::configure( $gateway->get_secret_key() );
+			$api = WC_Edge_Client_Factory::client( $gateway->get_secret_key() );
 
 			// Prefer the subscription we already know about. Fetching it by id is
 			// both more direct than searching by URL and immune to the index
 			// endpoint, which currently returns 500.
-			$existing = self::fetch_known( $mode );
+			$existing = self::fetch_known( $api, $mode );
 
 			// Only fall back to searching when we have nothing recorded - after a
 			// reinstall, say. Treated as best effort so a broken index does not
 			// stop a site registering.
 			if ( ! $existing ) {
-				$existing = self::find_by_url( $callback );
+				$existing = self::find_by_url( $api, $callback );
 			}
 
 			if ( $existing ) {
-				return self::adopt( $mode, $existing, $callback );
+				return self::adopt( $api, $mode, $existing, $callback );
 			}
 
-			return self::create( $mode, $callback );
+			return self::create( $api, $mode, $callback );
 		} catch ( \Throwable $e ) {
 			WC_Edge_Logger::error( 'Webhook reconciliation failed: ' . $e->getMessage() );
 
-			return new WP_Error( 'edge_webhook_reconcile_failed', $e->getMessage() );
+			// The status travels with the error so callers can tell a permission
+			// problem from a mistake in the settings without matching on prose.
+			return new WP_Error(
+				'edge_webhook_reconcile_failed',
+				$e->getMessage(),
+				array(
+					'status' => $e instanceof WC_Edge_API_Exception ? $e->get_status_code() : 0,
+				)
+			);
 		}
 	}
 
@@ -220,10 +228,11 @@ final class WC_Edge_Subscription_Reconciler {
 	 * when its URL has moved on - in each case the caller should search or
 	 * create rather than adopt something that is no longer ours.
 	 *
-	 * @param string $mode Mode.
+	 * @param WC_Edge_API_Client $api  Configured client.
+	 * @param string             $mode Mode.
 	 * @return object|null
 	 */
-	private static function fetch_known( $mode ) {
+	private static function fetch_known( WC_Edge_API_Client $api, $mode ) {
 		$stored = self::stored();
 
 		if ( empty( $stored[ $mode ]['id'] ) ) {
@@ -231,7 +240,7 @@ final class WC_Edge_Subscription_Reconciler {
 		}
 
 		try {
-			$response = \Edge\Client::get(
+			$response = $api->get(
 				'webhook_subscriptions/' . rawurlencode( (string) $stored[ $mode ]['id'] )
 			);
 		} catch ( \Throwable $e ) {
@@ -257,12 +266,13 @@ final class WC_Edge_Subscription_Reconciler {
 	 * The cost of the index being unavailable is a possible duplicate after a
 	 * reinstall, which is better than being unable to receive webhooks at all.
 	 *
-	 * @param string $callback Callback URL.
+	 * @param WC_Edge_API_Client $api      Configured client.
+	 * @param string             $callback Callback URL.
 	 * @return object|null
 	 */
-	private static function find_by_url( $callback ) {
+	private static function find_by_url( WC_Edge_API_Client $api, $callback ) {
 		try {
-			$response = \Edge\Client::get( 'webhook_subscriptions', array( 'page' => array( 'size' => 100 ) ) );
+			$response = $api->get( 'webhook_subscriptions', array( 'page' => array( 'size' => 100 ) ) );
 		} catch ( \Throwable $e ) {
 			WC_Edge_Logger::info( 'Could not list webhook subscriptions: ' . $e->getMessage() );
 
@@ -285,12 +295,13 @@ final class WC_Edge_Subscription_Reconciler {
 	/**
 	 * Reuse an existing subscription, correcting it if it has drifted.
 	 *
-	 * @param string $mode     Mode.
-	 * @param object $existing Subscription resource.
-	 * @param string $callback Callback URL.
+	 * @param WC_Edge_API_Client $api      Configured client.
+	 * @param string             $mode     Mode.
+	 * @param object             $existing Subscription resource.
+	 * @param string             $callback Callback URL.
 	 * @return true|WP_Error
 	 */
-	private static function adopt( $mode, $existing, $callback ) {
+	private static function adopt( WC_Edge_API_Client $api, $mode, $existing, $callback ) {
 		$id     = (string) $existing->id;
 		$events = isset( $existing->attributes->events ) ? (array) $existing->attributes->events : array();
 		$status = isset( $existing->attributes->status ) ? (string) $existing->attributes->status : '';
@@ -299,7 +310,7 @@ final class WC_Edge_Subscription_Reconciler {
 		$needs_events = array_diff( self::EVENTS, $events );
 
 		if ( ! empty( $needs_events ) || 'active' !== $status || $url_drifted ) {
-			\Edge\Client::patch(
+			$api->patch(
 				'webhook_subscriptions/' . rawurlencode( $id ),
 				array(
 					'data' => array(
@@ -332,12 +343,13 @@ final class WC_Edge_Subscription_Reconciler {
 	/**
 	 * Create a subscription for this site.
 	 *
-	 * @param string $mode     Mode.
-	 * @param string $callback Callback URL.
+	 * @param WC_Edge_API_Client $api      Configured client.
+	 * @param string             $mode     Mode.
+	 * @param string             $callback Callback URL.
 	 * @return true|WP_Error
 	 */
-	private static function create( $mode, $callback ) {
-		$response = \Edge\Client::create(
+	private static function create( WC_Edge_API_Client $api, $mode, $callback ) {
+		$response = $api->create(
 			'webhook_subscriptions',
 			array(
 				'data' => array(

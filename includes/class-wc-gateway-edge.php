@@ -182,7 +182,14 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 		// A 403 here means the API key has no webhook_subscriptions permission,
 		// which is a token scope decision rather than a mistake in the settings.
 		// Point at the manual secret instead of implying the keys are wrong.
-		if ( false !== stripos( $result->get_error_message(), 'forbidden' ) ) {
+		//
+		// The API answers 403 with an empty body, so the status is the only
+		// reliable signal; the message match is a fallback for anything that
+		// arrives without one.
+		$data   = $result->get_error_data();
+		$status = is_array( $data ) && isset( $data['status'] ) ? (int) $data['status'] : 0;
+
+		if ( 403 === $status || false !== stripos( $result->get_error_message(), 'forbidden' ) ) {
 			if ( '' !== trim( (string) $this->get_option( 'webhook_secret' ) ) ) {
 				WC_Admin_Settings::add_message(
 					__( 'Edge Payments: settings saved. Using the webhook signing secret you supplied, since this API key cannot manage webhook subscriptions.', 'edge-gateway' )

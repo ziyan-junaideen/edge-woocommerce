@@ -190,12 +190,12 @@ final class WC_Edge_Webhook_Controller {
 			throw new RuntimeException( 'Edge gateway unavailable while handling a webhook.' );
 		}
 
-		WC_Edge_Client_Factory::configure( $gateway->get_secret_key() );
+		$api = WC_Edge_Client_Factory::client( $gateway->get_secret_key() );
 
 		// The payload carries a state, but the signature does not authenticate
 		// the body, so it is only a hint that something changed. This is the
 		// authoritative read.
-		$demand = \Edge\Client::get( 'payment_demands/' . rawurlencode( $event['resource_id'] ) );
+		$demand = $api->get( 'payment_demands/' . rawurlencode( $event['resource_id'] ) );
 
 		$state = isset( $demand->data->attributes->processor_state )
 			? (string) $demand->data->attributes->processor_state

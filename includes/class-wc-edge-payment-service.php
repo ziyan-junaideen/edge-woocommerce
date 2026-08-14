@@ -82,12 +82,12 @@ final class WC_Edge_Payment_Service {
 		}
 
 		try {
-			WC_Edge_Client_Factory::configure( $gateway->get_secret_key() );
+			$api = WC_Edge_Client_Factory::client( $gateway->get_secret_key() );
 		} catch ( InvalidArgumentException $e ) {
 			return new WP_Error( 'edge_not_configured', self::generic_failure() );
 		}
 
-		$built = self::build_resources( $attempt, $facts );
+		$built = self::build_resources( $api, $attempt, $facts );
 
 		if ( is_wp_error( $built ) ) {
 			return $built;
@@ -137,12 +137,12 @@ final class WC_Edge_Payment_Service {
 		}
 
 		try {
-			WC_Edge_Client_Factory::configure( $gateway->get_secret_key() );
+			$api = WC_Edge_Client_Factory::client( $gateway->get_secret_key() );
 		} catch ( InvalidArgumentException $e ) {
 			return new WP_Error( 'edge_not_configured', self::generic_failure() );
 		}
 
-		$demand = self::fetch_demand( $bound );
+		$demand = self::fetch_demand( $api, $bound );
 
 		if ( is_wp_error( $demand ) ) {
 			return $demand;
@@ -154,18 +154,19 @@ final class WC_Edge_Payment_Service {
 			return $mismatch;
 		}
 
-		return self::do_confirm( $bound );
+		return self::do_confirm( $api, $bound );
 	}
 
 	/**
 	 * Fetch a demand with its payment method included.
 	 *
-	 * @param string $demand_id Demand id.
+	 * @param WC_Edge_API_Client $api       Configured client.
+	 * @param string             $demand_id Demand id.
 	 * @return object|WP_Error
 	 */
-	private static function fetch_demand( $demand_id ) {
+	private static function fetch_demand( WC_Edge_API_Client $api, $demand_id ) {
 		try {
-			return \Edge\Client::get(
+			return $api->get(
 				'payment_demands/' . rawurlencode( $demand_id ),
 				array( 'include' => 'payment_method' )
 			);
@@ -282,16 +283,17 @@ final class WC_Edge_Payment_Service {
 	 * the authoritative state is read back before deciding anything. Retrying a
 	 * confirm that already succeeded would be a second charge.
 	 *
-	 * @param string $demand_id Demand id.
+	 * @param WC_Edge_API_Client $api       Configured client.
+	 * @param string             $demand_id Demand id.
 	 * @return string|WP_Error
 	 */
-	private static function do_confirm( $demand_id ) {
+	private static function do_confirm( WC_Edge_API_Client $api, $demand_id ) {
 		try {
-			\Edge\Client::confirm( 'payment_demands', $demand_id );
+			$api->confirm( 'payment_demands', $demand_id );
 
 			return $demand_id;
-		} catch ( \Edge\Exception $e ) {
-			$status = $e->getStatusCode();
+		} catch ( WC_Edge_API_Exception $e ) {
+			$status = $e->get_status_code();
 
 			if ( 422 === $status ) {
 				WC_Edge_Logger::error( 'Confirm rejected for ' . $demand_id . ': ' . $e->getMessage() );
@@ -302,25 +304,26 @@ final class WC_Edge_Payment_Service {
 			// 0 is a transport failure; 405 means the state moved under us; 5xx
 			// may have applied. All three are ambiguous until we look.
 			if ( 0 === $status || 405 === $status || $status >= 500 ) {
-				return self::resolve_ambiguous_confirm( $demand_id );
+				return self::resolve_ambiguous_confirm( $api, $demand_id );
 			}
 
 			WC_Edge_Logger::error( 'Confirm failed for ' . $demand_id . ' (HTTP ' . $status . ')' );
 
 			return new WP_Error( 'edge_confirm_failed', self::generic_failure() );
 		} catch ( \Throwable $e ) {
-			return self::resolve_ambiguous_confirm( $demand_id );
+			return self::resolve_ambiguous_confirm( $api, $demand_id );
 		}
 	}
 
 	/**
 	 * Read the demand back and decide whether the confirm took effect.
 	 *
-	 * @param string $demand_id Demand id.
+	 * @param WC_Edge_API_Client $api       Configured client.
+	 * @param string             $demand_id Demand id.
 	 * @return string|WP_Error
 	 */
-	private static function resolve_ambiguous_confirm( $demand_id ) {
-		$demand = self::fetch_demand( $demand_id );
+	private static function resolve_ambiguous_confirm( WC_Edge_API_Client $api, $demand_id ) {
+		$demand = self::fetch_demand( $api, $demand_id );
 
 		if ( is_wp_error( $demand ) ) {
 			return new WP_Error( 'edge_confirm_unresolved', self::generic_failure() );
@@ -340,7 +343,7 @@ final class WC_Edge_Payment_Service {
 		// Still an unconfirmed intent, so nothing was applied. One retry only.
 		if ( in_array( $state, array( 'incomplete', 'ready' ), true ) ) {
 			try {
-				\Edge\Client::confirm( 'payment_demands', $demand_id );
+				$api->confirm( 'payment_demands', $demand_id );
 
 				return $demand_id;
 			} catch ( \Throwable $e ) {
@@ -368,15 +371,17 @@ final class WC_Edge_Payment_Service {
 	 * or address. Only payment_demands carries an idempotency key; customers and
 	 * consumer_addresses do not, so this is the only protection they get.
 	 *
-	 * @param object $attempt Attempt row.
-	 * @param array  $facts   Collected facts.
+	 * @param WC_Edge_API_Client $api     Configured client.
+	 * @param object             $attempt Attempt row.
+	 * @param array              $facts   Collected facts.
 	 * @return array|WP_Error
 	 */
-	private static function build_resources( $attempt, array $facts ) {
+	private static function build_resources( WC_Edge_API_Client $api, $attempt, array $facts ) {
 		$customer_id = $attempt->customer_id;
 
 		if ( empty( $customer_id ) ) {
 			$created = self::create(
+				$api,
 				'customers',
 				WC_Edge_Order_Mapper::customer_document(
 					trim( $facts['billing_first_name'] . ' ' . $facts['billing_last_name'] ),
@@ -402,7 +407,7 @@ final class WC_Edge_Payment_Service {
 				return $document;
 			}
 
-			$created = self::create( 'consumer_addresses', $document );
+			$created = self::create( $api, 'consumer_addresses', $document );
 
 			if ( is_wp_error( $created ) ) {
 				return $created;
@@ -421,7 +426,7 @@ final class WC_Edge_Payment_Service {
 			// over: the API falls back to billing, which is what a
 			// non-shippable order would use anyway.
 			if ( ! is_wp_error( $document ) ) {
-				$created = self::create( 'consumer_addresses', $document );
+				$created = self::create( $api, 'consumer_addresses', $document );
 
 				if ( ! is_wp_error( $created ) ) {
 					$shipping_id = $created;
@@ -434,6 +439,7 @@ final class WC_Edge_Payment_Service {
 		}
 
 		$demand_id = self::create(
+			$api,
 			'payment_demands',
 			WC_Edge_Order_Mapper::demand_document(
 				array(
@@ -464,16 +470,17 @@ final class WC_Edge_Payment_Service {
 	/**
 	 * POST a document and return the new resource id.
 	 *
-	 * @param string $endpoint Resource endpoint.
-	 * @param array  $document JSON:API document.
+	 * @param WC_Edge_API_Client $api      Configured client.
+	 * @param string             $endpoint Resource endpoint.
+	 * @param array              $document JSON:API document.
 	 * @return string|WP_Error
 	 */
-	private static function create( $endpoint, array $document ) {
+	private static function create( WC_Edge_API_Client $api, $endpoint, array $document ) {
 		try {
-			$response = \Edge\Client::create( $endpoint, $document );
-		} catch ( \Edge\Exception $e ) {
+			$response = $api->create( $endpoint, $document );
+		} catch ( WC_Edge_API_Exception $e ) {
 			WC_Edge_Logger::error(
-				sprintf( 'Creating %s failed (HTTP %d): %s', $endpoint, $e->getStatusCode(), $e->getMessage() )
+				sprintf( 'Creating %s failed (HTTP %d): %s', $endpoint, $e->get_status_code(), $e->getMessage() )
 			);
 
 			return new WP_Error( 'edge_request_failed', self::describe( $e ) );
@@ -493,22 +500,22 @@ final class WC_Edge_Payment_Service {
 	/**
 	 * Turn an Edge validation failure into something a shopper can act on.
 	 *
-	 * Edge\Exception::getMessage() returns the first error's `title`, which for a
-	 * changeset failure is bare text like "can't be blank" - true but useless
-	 * without knowing which field. The pointer carries that, so the message is
-	 * built from it instead.
+	 * The exception message is the first error's `title`, which for a changeset
+	 * failure is bare text like "can't be blank" - true but useless without
+	 * knowing which field. The pointer carries that, so the message is built
+	 * from it instead.
 	 *
-	 * @param \Edge\Exception $e Exception.
+	 * @param WC_Edge_API_Exception $e Exception.
 	 * @return string
 	 */
-	private static function describe( \Edge\Exception $e ) {
-		if ( 422 !== $e->getStatusCode() ) {
+	private static function describe( WC_Edge_API_Exception $e ) {
+		if ( 422 !== $e->get_status_code() ) {
 			return self::generic_failure();
 		}
 
 		$fields = array();
 
-		foreach ( (array) $e->getErrors() as $error ) {
+		foreach ( (array) $e->get_errors() as $error ) {
 			$pointer = isset( $error['source']['pointer'] ) ? $error['source']['pointer'] : '';
 			$field   = self::field_from_pointer( $pointer );
 

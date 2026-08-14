@@ -192,17 +192,18 @@ final class WC_Edge_Order_Mapper {
 			return $alpha2;
 		}
 
-		try {
-			return \Edge\Helpers::convertAlpha2ToAlpha3( $alpha2 );
-		} catch ( \Throwable $e ) {
-			// An unknown country must surface as a checkout validation message,
-			// not as an uncaught exception from a helper deep in the SDK.
+		$alpha3 = WC_Edge_Countries::to_alpha3( $alpha2 );
+
+		if ( '' === $alpha3 ) {
+			// An unknown country must surface as a checkout validation message.
 			return new WP_Error(
 				'edge_country_unsupported',
 				__( 'That billing country is not supported for card payments.', 'edge-gateway' ),
 				array( 'country' => $alpha2 )
 			);
 		}
+
+		return $alpha3;
 	}
 
 	/**

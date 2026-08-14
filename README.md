@@ -4,9 +4,12 @@
 
 To install the WooCommerce Edge Payments Gateway plugin, follow these steps:
 
-1. Download the plugin files from the WooCommerce Edge Payments Gateway repository.
-2. Upload the plugin files to the `/wp-content/plugins/` directory.
-3. Run `composer install` in the root directory of the plugin to install the required dependencies.
+1. Download the plugin ZIP from the WooCommerce Edge Payments Gateway repository's releases.
+2. Upload it through 'Plugins' > 'Add New' > 'Upload Plugin', or unzip it into `/wp-content/plugins/`.
+
+The plugin has no third-party PHP dependencies, so there is nothing to install alongside it.
+Developers building from a source checkout need `composer install` for the test and linting tools,
+and `npm install && npx wp-scripts build` for the Blocks checkout bundle.
 
 ## Activation in WordPress and WooCommerce
 

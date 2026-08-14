@@ -43,37 +43,30 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-php${{ matrix.php }}-
 
+      # Composer is a development tool here: PHPUnit and the coding standards.
+      # The shipped plugin has no production dependencies.
       - name: Install dependencies
         run: composer install --prefer-dist --no-progress
 
-      # Guards the trap that has already caught us once: the composer constraint
-      # alone never proves which SDK resolved. dev-main still points at the
-      # pre-v2 release, which has no Client::confirm().
-      - name: Verify the Edge v2 SDK is installed
+      # The plugin talks to Edge through WordPress's HTTP API. A reference to
+      # the old SDK or to Guzzle would be a dead name at runtime, because
+      # nothing loads an autoloader any more.
+      - name: Assert no third-party runtime dependencies
         run: |
-          php -r '
-            require "vendor/autoload.php";
-            $r = new ReflectionClass("Edge\\Client");
-            $problems = [];
-            if ( $r->getConstant("VERSION") !== "2.0.0" ) {
-              $problems[] = "VERSION is " . var_export($r->getConstant("VERSION"), true);
-            }
-            if ( strpos((string) $r->getConstant("DEFAULT_BASE_URI"), "/v2/") === false ) {
-              $problems[] = "base URI is not a v2 root";
-            }
-            foreach ( ["confirm", "patch", "setBaseUri"] as $m ) {
-              if ( ! $r->hasMethod($m) ) { $problems[] = "missing {$m}()"; }
-            }
-            if ( $problems ) {
-              fwrite(STDERR, "Not the Edge v2 SDK: " . implode("; ", $problems) . "\n\n");
-              fwrite(STDERR, "This is expected until the SDK is released. composer.json\n");
-              fwrite(STDERR, "requires dev-main, and edge-php-sdk main is still the\n");
-              fwrite(STDERR, "July-2024 pre-v2 commit. To fix: merge feature/v2-api-mapping,\n");
-              fwrite(STDERR, "tag v2.0.0, then change the constraint here to ^2.0.\n");
-              exit(1);
-            }
-            echo "Edge v2 SDK OK\n";
-          '
+          if grep -rnE '\\(Edge|GuzzleHttp)\\' edge-gateway.php includes; then
+            echo "Edge SDK or Guzzle referenced in plugin sources." >&2
+            exit 1
+          fi
+          if grep -rn 'vendor/autoload.php' edge-gateway.php includes; then
+            echo "Plugin sources expect a Composer autoloader." >&2
+            exit 1
+          fi
+          if php -r 'exit(empty(json_decode(file_get_contents("composer.json"), true)["require"]["edge-payment-technologies/edge-php-sdk"]) ? 0 : 1);'; then
+            echo "No runtime dependency on the Edge SDK."
+          else
+            echo "composer.json still requires the Edge SDK." >&2
+            exit 1
+          fi
 
       - name: Lint PHP syntax
         run: |

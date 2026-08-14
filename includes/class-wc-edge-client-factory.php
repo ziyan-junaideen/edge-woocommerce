@@ -1,6 +1,6 @@
 <?php
 /**
- * Configures the Edge PHP SDK for this request.
+ * Builds configured Edge API clients.
  *
  * @package WooCommerce Edge Payments Gateway
  * @since   2.0.0
@@ -12,12 +12,11 @@ if ( ! defined( 'ABSPATH' ) && ! defined( 'WC_EDGE_TESTING' ) ) {
 }
 
 /**
- * The only place that touches the Edge SDK's global configuration.
+ * Resolves where the plugin talks to Edge, and hands out clients for it.
  *
- * `Edge\Auth` and `Edge\Client` hold process-global static state: one API key,
- * one base URI and one HTTP client per PHP process. Funnelling every mutation
- * through this class keeps that from being set from several places with
- * different values within a single request.
+ * Every environment decision - the API root, the hosted form origin, the browser
+ * SDK URL, TLS policy and the user agent - is made here, so a caller only has to
+ * supply an API key.
  */
 final class WC_Edge_Client_Factory {
 
@@ -51,37 +50,13 @@ final class WC_Edge_Client_Factory {
 	const PRODUCTION_HOST_SUFFIX = 'tryedge.io';
 
 	/**
-	 * Seconds to wait for a connection.
-	 *
-	 * @var int
-	 */
-	const CONNECT_TIMEOUT = 5;
-
-	/**
-	 * Seconds to wait for a complete response.
-	 *
-	 * @var int
-	 */
-	const TIMEOUT = 15;
-
-	/**
-	 * Whether the HTTP client has been installed this request.
-	 *
-	 * @var bool
-	 */
-	private static $http_client_installed = false;
-
-	/**
-	 * Point the SDK at Edge and authenticate it.
-	 *
-	 * Safe to call repeatedly; the SDK reads the API key per request, so
-	 * re-configuring between calls is how mode switches take effect.
+	 * Build a client authenticated with one secret key.
 	 *
 	 * @param string $secret_key An `ept_{live|sandbox}_s...` key.
-	 * @return void
+	 * @return WC_Edge_API_Client
 	 * @throws InvalidArgumentException When handed a key that is not a secret key.
 	 */
-	public static function configure( $secret_key ) {
+	public static function client( $secret_key ) {
 		if ( ! WC_Edge_Mode::is_secret( $secret_key ) ) {
 			// Never let a publishable key authenticate server-side calls: the API
 			// accepts it as a bearer token but with different permissions, which
@@ -89,39 +64,14 @@ final class WC_Edge_Client_Factory {
 			throw new InvalidArgumentException( 'Edge API calls require a secret key.' );
 		}
 
-		self::install_http_client();
-
-		\Edge\Auth::setApiKey( trim( $secret_key ) );
-		\Edge\Client::setBaseUri( self::api_base_uri() );
-		\Edge\Client::setUserAgentSuffix( self::user_agent_suffix() );
-		\Edge\Client::setVerifySsl( self::should_verify_tls() );
-	}
-
-	/**
-	 * Give the SDK an HTTP client with timeouts.
-	 *
-	 * The SDK builds `new GuzzleClient()` with no configuration, so it has no
-	 * connect or read timeout: a hung Edge API would hold a checkout request
-	 * open until PHP's own limit. `setHttpClient()` is the documented seam.
-	 *
-	 * @return void
-	 */
-	private static function install_http_client() {
-		if ( self::$http_client_installed ) {
-			return;
-		}
-
-		\Edge\Client::setHttpClient(
-			new \GuzzleHttp\Client(
-				array(
-					'connect_timeout' => self::CONNECT_TIMEOUT,
-					'timeout'         => self::TIMEOUT,
-					'http_errors'     => true,
-				)
+		return new WC_Edge_API_Client(
+			$secret_key,
+			array(
+				'base_uri'   => self::api_base_uri(),
+				'user_agent' => self::user_agent(),
+				'verify_tls' => self::should_verify_tls(),
 			)
 		);
-
-		self::$http_client_installed = true;
 	}
 
 	/**
@@ -138,7 +88,7 @@ final class WC_Edge_Client_Factory {
 			return EDGE_API_BASE_URI;
 		}
 
-		return \Edge\Client::DEFAULT_BASE_URI;
+		return WC_Edge_API_Client::DEFAULT_BASE_URI;
 	}
 
 	/**
@@ -211,9 +161,13 @@ final class WC_Edge_Client_Factory {
 	/**
 	 * Identify this integration to Edge.
 	 *
+	 * The API marks User-Agent required on every operation, and WordPress sends
+	 * its own generic one unless told otherwise, so this is the whole header
+	 * value rather than a suffix appended to something else.
+	 *
 	 * @return string
 	 */
-	public static function user_agent_suffix() {
+	public static function user_agent() {
 		$parts = array( 'EdgeWooCommerce/' . ( defined( 'WC_EDGE_VERSION' ) ? WC_EDGE_VERSION : 'dev' ) );
 
 		if ( defined( 'WC_VERSION' ) ) {
@@ -224,19 +178,8 @@ final class WC_Edge_Client_Factory {
 			$parts[] = 'WordPress/' . get_bloginfo( 'version' );
 		}
 
+		$parts[] = 'PHP/' . PHP_VERSION;
+
 		return implode( ' ', $parts );
-	}
-
-	/**
-	 * Reset memoised state. Test seam.
-	 *
-	 * @return void
-	 */
-	public static function reset() {
-		self::$http_client_installed = false;
-
-		if ( class_exists( '\Edge\Client' ) ) {
-			\Edge\Client::reset();
-		}
 	}
 }
