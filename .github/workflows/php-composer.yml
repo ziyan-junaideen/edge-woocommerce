@@ -1,4 +1,4 @@
-name: PHP Composer
+name: PHP
 
 on:
   push:
@@ -10,30 +10,102 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  test:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and the ceiling of the supported range. WooCommerce 11
+        # requires PHP 7.4, and 8.3 is what development runs on, so both need to
+        # stay green.
+        php: [ '7.4', '8.3' ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate composer.json
+        run: composer validate --strict --no-check-lock
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: ${{ runner.os }}-php${{ matrix.php }}-${{ hashFiles('**/composer.json') }}
+          restore-keys: |
+            ${{ runner.os }}-php${{ matrix.php }}-
+
+      # Composer is a development tool here: PHPUnit and the coding standards.
+      # The shipped plugin has no production dependencies.
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+
+      # The plugin talks to Edge through WordPress's HTTP API. A reference to
+      # the old SDK or to Guzzle would be a dead name at runtime, because
+      # nothing loads an autoloader any more.
+      - name: Assert no third-party runtime dependencies
+        run: |
+          if grep -rnE '\\(Edge|GuzzleHttp)\\' edge-gateway.php includes; then
+            echo "Edge SDK or Guzzle referenced in plugin sources." >&2
+            exit 1
+          fi
+          if grep -rn 'vendor/autoload.php' edge-gateway.php includes; then
+            echo "Plugin sources expect a Composer autoloader." >&2
+            exit 1
+          fi
+          if php -r 'exit(empty(json_decode(file_get_contents("composer.json"), true)["require"]["edge-payment-technologies/edge-php-sdk"]) ? 0 : 1);'; then
+            echo "No runtime dependency on the Edge SDK."
+          else
+            echo "composer.json still requires the Edge SDK." >&2
+            exit 1
+          fi
+
+      - name: Lint PHP syntax
+        run: |
+          find . -name '*.php' \
+            -not -path './vendor/*' \
+            -not -path './node_modules/*' \
+            -print0 | xargs -0 -n1 -P4 php -l > /dev/null
+
+      - name: Coding standards
+        run: composer run-script lint
+
+      - name: Unit tests
+        run: composer run-script test
+
+  javascript:
+    name: JavaScript
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Validate composer.json and composer.lock
-      run: composer validate --strict
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.tool-versions'
+          cache: npm
 
-    - name: Cache Composer packages
-      id: composer-cache
-      uses: actions/cache@v3
-      with:
-        path: vendor
-        key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-php-
+      - name: Install dependencies
+        run: npm ci
 
-    - name: Install dependencies
-      run: composer install --prefer-dist --no-progress
+      - name: Build
+        run: npm run build
 
-    # Add a test script to composer.json, for instance: "test": "vendor/bin/phpunit"
-    # Docs: https://getcomposer.org/doc/articles/scripts.md
-
-    # - name: Run test suite
-    #   run: composer run-script test
+      # The bundle must never contain card handling: the hosted iframe collects
+      # the card and only an opaque demand id crosses back into WooCommerce.
+      - name: Assert no card data in the bundle
+        run: |
+          if grep -qiE 'encryptedCard|card_pan_token|card_cvv_token|initializeForm' assets/js/frontend/blocks.js; then
+            echo "Card handling found in the built bundle." >&2
+            exit 1
+          fi
+          echo "No card handling in the bundle."

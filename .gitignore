@@ -9,12 +9,11 @@ sftp-config.json
 .idea
 ._*
 
-# Grunt
+# Node
 /node_modules/
 /deploy/
-package-lock.json
 
-# Composer
+# Composer (development only - the shipped plugin has no runtime dependencies)
 /vendor/
 composer.lock
 
@@ -43,3 +42,9 @@ Thumbs.db
 select2.scss
 /assets/
 /languages/
+
+# PHPUnit
+.phpunit.result.cache
+
+# Release build output
+/dist/
