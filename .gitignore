@@ -9,10 +9,9 @@ sftp-config.json
 .idea
 ._*
 
-# Grunt
+# Node
 /node_modules/
 /deploy/
-package-lock.json
 
 # Composer (development only - the shipped plugin has no runtime dependencies)
 /vendor/
