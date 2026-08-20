@@ -145,4 +145,29 @@ class FingerprintTest extends TestCase {
 			WC_Edge_Fingerprint::of( $this->facts( array( 'billing_city' => array( 'x' ) ) ) )
 		);
 	}
+
+	/**
+	 * cart_hash cannot see a renamed product or a changed fee composition:
+	 * WooCommerce builds it from a cart session with each product object unset,
+	 * and fees are not in the cart rows. Without this field an attempt would be
+	 * reused and its demand would keep the old line items.
+	 */
+	public function test_itemisation_hash_changes_the_digest(): void {
+		$facts = $this->facts();
+
+		$before = \WC_Edge_Fingerprint::of( $facts );
+
+		$facts['itemisation_hash'] = 'a-different-basket';
+
+		$this->assertNotSame( $before, \WC_Edge_Fingerprint::of( $facts ) );
+	}
+
+	public function test_an_unchanged_itemisation_hash_keeps_the_digest(): void {
+		$facts = $this->facts();
+
+		$this->assertSame(
+			\WC_Edge_Fingerprint::of( $facts ),
+			\WC_Edge_Fingerprint::of( $facts )
+		);
+	}
 }

@@ -23,6 +23,12 @@ if ( ! defined( 'ABSPATH' ) && ! defined( 'WC_EDGE_TESTING' ) ) {
  * So the key cannot be a per-order constant. It has to change whenever anything
  * about the payment changes, or a shopper who edits their cart pays the amount
  * from before the edit. This hash is what the attempt key is derived from.
+ *
+ * `cart_hash` does not cover everything on its own. WooCommerce builds it from
+ * `WC_Cart_Session::get_cart_for_session()`, which unsets each row's product
+ * object, so a renamed product or an edited SKU never reaches it; calculated
+ * fees are not in the cart rows either. `itemisation_hash` closes that gap - see
+ * WC_Edge_Cart_Items - so an attempt is never reused with stale line items.
  */
 final class WC_Edge_Fingerprint {
 
@@ -36,6 +42,7 @@ final class WC_Edge_Fingerprint {
 	 */
 	const FIELDS = array(
 		'cart_hash',
+		'itemisation_hash',
 		'amount_cents',
 		'currency',
 		'mode',

@@ -33,7 +33,7 @@ class ApiClientTest extends TestCase {
 			self::SECRET,
 			array_merge(
 				array(
-					'user_agent' => 'EdgeWooCommerce/2.0.0',
+					'user_agent' => 'EdgeWooCommerce/2.1.0',
 					'verify_tls' => true,
 				),
 				$args
@@ -65,7 +65,7 @@ class ApiClientTest extends TestCase {
 		$this->assertSame( 'Bearer ' . self::SECRET, $request['args']['headers']['Authorization'] );
 		$this->assertSame( 'application/vnd.api+json', $request['args']['headers']['Accept'] );
 		$this->assertSame( 'application/vnd.api+json', $request['args']['headers']['Content-Type'] );
-		$this->assertSame( 'EdgeWooCommerce/2.0.0', $request['args']['user-agent'] );
+		$this->assertSame( 'EdgeWooCommerce/2.1.0', $request['args']['user-agent'] );
 		$this->assertSame( 'body', $request['args']['data_format'] );
 
 		$body = json_decode( $request['args']['body'], true );
@@ -399,5 +399,93 @@ class ApiClientTest extends TestCase {
 			'https://api.tryedge.test:4001/v2/customers',
 			WC_Edge_Test_Transport::last()['url']
 		);
+	}
+
+	/**
+	 * The bytes the reported bug is about, asserted at the wire rather than
+	 * logged. A $1.00 product bought twice must leave as a 100 cent unit at
+	 * quantity 2 - Edge reads amount_cents as the price of one unit, and the
+	 * dashboard was showing $2.00 at quantity 1 because the plugin sent no line
+	 * items and the backend substituted a single aggregate row.
+	 *
+	 * AGENTS.md forbids logging full API payloads, so this is how the payload is
+	 * inspected.
+	 */
+	public function test_a_cart_reaches_the_wire_with_per_unit_line_items(): void {
+		WC_Edge_Test_Transport::respond( 201, '{"data":{"id":"abc","type":"payment_demands"}}' );
+
+		$collected = \WC_Edge_Cart_Items::normalise(
+			array(
+				'lines'    => array(
+					array(
+						'readable'    => true,
+						'name'        => 'Edge Test Product',
+						'description' => '',
+						'sku'         => 'EDGE-1',
+						'quantity'    => '2',
+						'subtotal'    => '1.00',
+						'total'       => '1.00',
+					),
+				),
+				'fees'     => array(),
+				'shipping' => '5.99',
+				'tax'      => '0.55',
+			)
+		);
+
+		$this->client()->create(
+			'payment_demands',
+			\WC_Edge_Order_Mapper::demand_document(
+				array(
+					'amount_cents'       => 754,
+					'currency'           => 'USD',
+					'reference'          => 'wc-1',
+					'idempotency_key'    => 'attempt-abc',
+					'customer_id'        => 'cust-1',
+					'billing_address_id' => 'addr-1',
+					'cart'               => $collected,
+				)
+			)
+		);
+
+		$raw        = WC_Edge_Test_Transport::last()['args']['body'];
+		$body       = json_decode( $raw, true );
+		$attributes = $body['data']['attributes'];
+
+		// The whole point: 50 cents a unit at quantity 2, not 100 at quantity 1.
+		$this->assertSame(
+			array(
+				array(
+					'amount_cents'    => 50,
+					'amount_currency' => 'USD',
+					'quantity'        => 2,
+					'name'            => 'Edge Test Product',
+					'sku'             => 'EDGE-1',
+				),
+			),
+			$attributes['line_items']
+		);
+
+		$this->assertSame(
+			array(
+				'shipping_cents'    => 599,
+				'shipping_currency' => 'USD',
+			),
+			$attributes['shipping_detail']
+		);
+
+		$this->assertSame(
+			array(
+				'tax_cents'    => 55,
+				'tax_currency' => 'USD',
+			),
+			$attributes['tax_detail']
+		);
+
+		// The charge is still driven by amount_cents, not by the items.
+		$this->assertSame( 754, $attributes['amount_cents'] );
+
+		// A JSON array, not an object keyed by index.
+		$this->assertStringContainsString( '"line_items":[{', $raw );
 	}
 }

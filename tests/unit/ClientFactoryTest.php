@@ -81,6 +81,9 @@ class ClientFactoryTest extends TestCase {
 	 * whole header value rather than a suffix, so it has to identify us.
 	 */
 	public function test_user_agent_identifies_the_integration(): void {
-		$this->assertStringContainsString( 'EdgeWooCommerce/2.0.0', WC_Edge_Client_Factory::user_agent() );
+		$this->assertStringContainsString(
+			'EdgeWooCommerce/' . WC_EDGE_VERSION,
+			WC_Edge_Client_Factory::user_agent()
+		);
 	}
 }

@@ -3,7 +3,7 @@
  * Plugin Name: Edge Payments Gateway
  * Plugin URI: https://github.com/Edge-Payment-Technologies/edge-woocommerce
  * Description: Adds the Edge Payments gateway to your WooCommerce website.
- * Version: 2.0.0
+ * Version: 2.1.0
  *
  * Author: Edge Payments
  * Author URI: https://tryedge.io
@@ -28,7 +28,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'WC_EDGE_VERSION', '2.0.0' );
+define( 'WC_EDGE_VERSION', '2.1.0' );
 define( 'WC_EDGE_PLUGIN_FILE', __FILE__ );
 
 /**
@@ -126,6 +126,7 @@ class WC_Edge_Payments {
 		require_once $path . 'class-wc-edge-fingerprint.php';
 		require_once $path . 'class-wc-edge-order-mapper.php';
 		require_once $path . 'class-wc-edge-logger.php';
+		require_once $path . 'class-wc-edge-cart-items.php';
 		require_once $path . 'class-wc-edge-payment-service.php';
 		require_once $path . 'class-wc-edge-rest-controller.php';
 		require_once $path . 'class-wc-edge-webhook-store.php';

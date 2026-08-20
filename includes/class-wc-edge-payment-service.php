@@ -451,6 +451,7 @@ final class WC_Edge_Payment_Service {
 					'customer_id'         => $customer_id,
 					'billing_address_id'  => $billing_id,
 					'shipping_address_id' => $shipping_id,
+					'cart'                => isset( $facts['cart'] ) ? $facts['cart'] : array(),
 				)
 			)
 		);
@@ -641,9 +642,21 @@ final class WC_Edge_Payment_Service {
 			);
 		}
 
+		$cart = WC_Edge_Cart_Items::collect( WC()->cart );
+
+		if ( empty( $cart['complete'] ) ) {
+			// Not fatal: the payment goes through either way, and Edge falls
+			// back to a single aggregate line. Worth knowing about, though, so
+			// log the cause - the reason string only, never the cart itself.
+			WC_Edge_Logger::info(
+				'Cart could not be itemised for Edge: ' . (string) $cart['reason']
+			);
+		}
+
 		return array(
 			// Fingerprint inputs.
 			'cart_hash'             => WC()->cart->get_cart_hash(),
+			'itemisation_hash'      => (string) $cart['hash'],
 			'amount_cents'          => $amount_cents,
 			'currency'              => $currency,
 			'mode'                  => (string) $gateway->get_mode(),
@@ -668,6 +681,7 @@ final class WC_Edge_Payment_Service {
 			'shipping_country'      => $shipping['country'],
 
 			// Working values.
+			'cart'                  => $cart,
 			'session_key'           => (string) WC()->session->get_customer_id(),
 			'billing'               => $billing,
 			'shipping'              => $shipping,

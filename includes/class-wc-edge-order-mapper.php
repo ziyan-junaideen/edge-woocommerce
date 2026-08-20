@@ -21,6 +21,24 @@ if ( ! defined( 'ABSPATH' ) && ! defined( 'WC_EDGE_TESTING' ) ) {
 final class WC_Edge_Order_Mapper {
 
 	/**
+	 * Longest name or description sent for a line item.
+	 *
+	 * Plugin policy, not an Edge constraint: `line_items` is a jsonb column with
+	 * no length validation. A product title is free text and can run to a
+	 * paragraph, and there is no reason to put one in a payment request.
+	 *
+	 * @var int
+	 */
+	const MAX_TEXT_LENGTH = 120;
+
+	/**
+	 * Longest SKU sent for a line item. Also plugin policy.
+	 *
+	 * @var int
+	 */
+	const MAX_SKU_LENGTH = 64;
+
+	/**
 	 * Build a `customers` creation document.
 	 *
 	 * @param string $name  Customer name.
@@ -113,7 +131,7 @@ final class WC_Edge_Order_Mapper {
 	 *
 	 * @param array $args amount_cents, currency, description, reference,
 	 *                    idempotency_key, customer_id, billing_address_id, and
-	 *                    optionally shipping_address_id.
+	 *                    optionally shipping_address_id and cart.
 	 * @return array
 	 */
 	public static function demand_document( array $args ) {
@@ -129,6 +147,11 @@ final class WC_Edge_Order_Mapper {
 		if ( ! empty( $args['description'] ) ) {
 			$attributes['description'] = self::clean( $args['description'] );
 		}
+
+		self::add_addendum(
+			$attributes,
+			isset( $args['cart'] ) ? (array) $args['cart'] : array()
+		);
 
 		$relationships = array(
 			'payer'           => self::identifier( 'customers', $args['customer_id'] ),
@@ -150,6 +173,188 @@ final class WC_Edge_Order_Mapper {
 				'relationships' => $relationships,
 			),
 		);
+	}
+
+	/**
+	 * Attach the itemisation to a demand's attributes, or attach none of it.
+	 *
+	 * All four keys move together. Edge's wallet sheet builds its rows from
+	 * `line_items`, appends Tax and Shipping from the detail objects, and only
+	 * falls back to a single aggregate row when the combined list is empty
+	 * (`Core.RemoteClient.Evervault.line_items/1`). So a `tax_detail` sent
+	 * without line items does not degrade to the aggregate - it produces a sheet
+	 * showing tax and nothing else. Likewise, any non-empty `line_items`
+	 * suppresses the aggregate row the backend would otherwise generate, so a
+	 * basket missing a product reads as authoritative rather than as partial.
+	 *
+	 * When the cart could not be represented in full, sending nothing is the
+	 * honest outcome: the shopper sees one aggregate line, which is true.
+	 *
+	 * @param array $attributes Demand attributes, modified in place.
+	 * @param array $cart       Output of WC_Edge_Cart_Items::collect().
+	 * @return void
+	 */
+	private static function add_addendum( array &$attributes, array $cart ) {
+		if ( empty( $cart['complete'] ) || empty( $cart['lines'] ) ) {
+			return;
+		}
+
+		$currency = $attributes['amount_currency'];
+
+		// array_values() so wp_json_encode() renders a JSON array. A PHP array
+		// with a gap in its keys encodes as an object, which is not what the
+		// schema declares.
+		$attributes['line_items'] = array_values( self::line_items( (array) $cart['lines'], $currency ) );
+
+		if ( ! empty( $cart['shipping_cents'] ) && 0 < (int) $cart['shipping_cents'] ) {
+			$attributes['shipping_detail'] = array(
+				'shipping_cents'    => (int) $cart['shipping_cents'],
+				'shipping_currency' => $currency,
+			);
+		}
+
+		if ( ! empty( $cart['tax_cents'] ) && 0 < (int) $cart['tax_cents'] ) {
+			$attributes['tax_detail'] = array(
+				'tax_cents'    => (int) $cart['tax_cents'],
+				'tax_currency' => $currency,
+			);
+		}
+
+		// Where a negative WooCommerce fee lands. Coupon discounts are not here:
+		// they are already on the lines they apply to, and counting them in both
+		// places would misstate the order either way.
+		if ( ! empty( $cart['discount_cents'] ) && 0 < (int) $cart['discount_cents'] ) {
+			$attributes['discount_cents'] = (int) $cart['discount_cents'];
+		}
+	}
+
+	/**
+	 * Map normalised cart lines to Edge line items.
+	 *
+	 * @param array  $lines    Lines from WC_Edge_Cart_Items::collect().
+	 * @param string $currency Uppercase ISO 4217 code.
+	 * @return array
+	 */
+	public static function line_items( array $lines, $currency ) {
+		$currency = strtoupper( (string) $currency );
+		$items    = array();
+
+		foreach ( $lines as $line ) {
+			$items[] = self::line_item( (array) $line, $currency );
+		}
+
+		return $items;
+	}
+
+	/**
+	 * One line item, with per-unit money.
+	 *
+	 * Edge's `amount_cents` is the price of a *single unit*, not the line total:
+	 * the backend derives the line as `amount_cents * quantity`. WooCommerce
+	 * only stores whole-line figures, so each is divided back down. Getting this
+	 * wrong is the bug this whole change exists to fix - a $1 product bought
+	 * twice was arriving as $2 at quantity 1.
+	 *
+	 * `amount_cents` is the price *before* any coupon, with the reduction
+	 * carried separately in `discount_cents`. That is the Level 3 convention and
+	 * what `Core.Invoiced` sends.
+	 *
+	 * Tax is deliberately absent. All of it is on the demand's `tax_detail`, so
+	 * the same money is described once.
+	 *
+	 * @param array  $line     One normalised line.
+	 * @param string $currency Uppercase ISO 4217 code.
+	 * @return array
+	 */
+	private static function line_item( array $line, $currency ) {
+		$quantity = isset( $line['quantity'] ) ? max( 1, (int) $line['quantity'] ) : 1;
+		$subtotal = isset( $line['subtotal_cents'] ) ? max( 0, (int) $line['subtotal_cents'] ) : 0;
+		$total    = isset( $line['total_cents'] ) ? max( 0, (int) $line['total_cents'] ) : 0;
+
+		// A free item is a real line: amount_cents may be 0, quantity may not.
+		$item = array(
+			'amount_cents'    => self::per_unit( $subtotal, $quantity ),
+			'amount_currency' => $currency,
+			'quantity'        => $quantity,
+		);
+
+		$name = self::text( isset( $line['name'] ) ? $line['name'] : '', self::MAX_TEXT_LENGTH );
+
+		if ( '' !== $name ) {
+			$item['name'] = $name;
+		}
+
+		$description = self::text(
+			isset( $line['description'] ) ? $line['description'] : '',
+			self::MAX_TEXT_LENGTH
+		);
+
+		if ( '' !== $description ) {
+			$item['description'] = $description;
+		}
+
+		// Not every product has a SKU, and an empty string is not one.
+		$sku = self::text( isset( $line['sku'] ) ? $line['sku'] : '', self::MAX_SKU_LENGTH );
+
+		if ( '' !== $sku ) {
+			$item['sku'] = $sku;
+		}
+
+		$discount = self::per_unit( max( 0, $subtotal - $total ), $quantity );
+
+		if ( 0 < $discount ) {
+			$item['discount_cents']    = $discount;
+			$item['discount_currency'] = $currency;
+		}
+
+		return $item;
+	}
+
+	/**
+	 * Divide a whole-line amount into a per-unit one, rounding half up.
+	 *
+	 * `intdiv( 2n + q, 2q )` is `floor( n/q + 1/2 )` written without division:
+	 * doubling makes the half exact, and the `+ q` before the divide is the
+	 * `+ 1/2`. Doing it in floats would be the mistake WC_Edge_Money exists to
+	 * avoid. It is only correct for a non-negative numerator - intdiv truncates
+	 * toward zero rather than flooring - which is also the minimum Edge allows,
+	 * so the clamp does both jobs.
+	 *
+	 * Per-unit rounding cannot always reproduce the line exactly: 1000 cents
+	 * over 3 units is 333 each, and 333 * 3 is 999. That is fine here. Edge
+	 * treats line items as informational and never sums them; `amount_cents` on
+	 * the demand is sent separately and is what is charged.
+	 *
+	 * @param int $cents    Whole-line amount.
+	 * @param int $quantity Units.
+	 * @return int
+	 */
+	private static function per_unit( $cents, $quantity ) {
+		$cents    = max( 0, (int) $cents );
+		$quantity = max( 1, (int) $quantity );
+
+		return intdiv( ( 2 * $cents ) + $quantity, 2 * $quantity );
+	}
+
+	/**
+	 * Clean a value and cap its length.
+	 *
+	 * Cuts on characters rather than bytes where it can, so a multibyte title is
+	 * never split mid-character. The plugin declares `Requires PHP: 7.4` without
+	 * requiring ext-mbstring, so the byte fallback has to exist.
+	 *
+	 * @param mixed $value Raw value.
+	 * @param int   $limit Maximum length.
+	 * @return string
+	 */
+	private static function text( $value, $limit ) {
+		$value = self::clean( $value );
+
+		if ( function_exists( 'mb_substr' ) ) {
+			return mb_substr( $value, 0, $limit, 'UTF-8' );
+		}
+
+		return substr( $value, 0, $limit );
 	}
 
 	/**
