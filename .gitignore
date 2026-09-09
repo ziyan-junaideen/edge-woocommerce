@@ -48,3 +48,6 @@ select2.scss
 
 # Release build output
 /dist/
+
+# Local credentials for agents (see AGENTS.md). Never committed - the repo is public.
+AGENTS.local.md
