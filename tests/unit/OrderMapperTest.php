@@ -646,4 +646,121 @@ class OrderMapperTest extends TestCase {
 
 		$this->assertSame( '[', $encoded[0] );
 	}
+
+	private function refund( array $overrides = array() ): array {
+		return WC_Edge_Order_Mapper::refund_document(
+			array_merge(
+				array(
+					'demand_id'       => 'demand-9',
+					'amount_cents'    => 1000,
+					'reason_note'     => 'Customer changed their mind.',
+					'idempotency_key' => 'key-one',
+				),
+				$overrides
+			)
+		);
+	}
+
+	public function test_a_refund_document_has_the_real_plural_type(): void {
+		$this->assertSame( 'refund_demands', $this->refund()['data']['type'] );
+	}
+
+	public function test_a_refund_is_always_sent_with_the_custom_reason(): void {
+		// WooCommerce's reason is free text and cannot be mapped onto Edge's
+		// enum without guessing, so the text goes in the note instead.
+		$this->assertSame( 'custom', $this->refund()['data']['attributes']['reason'] );
+	}
+
+	public function test_a_refund_carries_the_amount_and_the_key(): void {
+		$attributes = $this->refund()['data']['attributes'];
+
+		$this->assertSame( 1000, $attributes['amount_cents'] );
+		$this->assertSame( 'key-one', $attributes['idempotency_key'] );
+	}
+
+	public function test_a_refund_amount_is_always_an_integer(): void {
+		$this->assertSame( 999, $this->refund( array( 'amount_cents' => '999' ) )['data']['attributes']['amount_cents'] );
+	}
+
+	/**
+	 * The backend inherits the currency from the payment demand and rejects a
+	 * value that disagrees, so sending one can only ever hurt.
+	 */
+	public function test_a_refund_never_sends_a_currency(): void {
+		$this->assertArrayNotHasKey( 'amount_currency', $this->refund()['data']['attributes'] );
+	}
+
+	public function test_a_refund_points_at_its_payment_demand(): void {
+		$relationships = $this->refund()['data']['relationships'];
+
+		$this->assertSame(
+			array(
+				'data' => array(
+					'type' => 'payment_demands',
+					'id'   => 'demand-9',
+				),
+			),
+			$relationships['payment_demand']
+		);
+	}
+
+	public function test_the_woocommerce_reason_travels_as_the_note(): void {
+		$this->assertSame(
+			'Customer changed their mind.',
+			$this->refund()['data']['attributes']['reason_note']
+		);
+	}
+
+	/**
+	 * The backend compares reason_note exactly when it decides whether a
+	 * replayed key is the same request, and "" is not the same value as absent.
+	 */
+	public function test_an_empty_reason_note_is_omitted_rather_than_blank(): void {
+		$this->assertArrayNotHasKey(
+			'reason_note',
+			$this->refund( array( 'reason_note' => '' ) )['data']['attributes']
+		);
+
+		$this->assertArrayNotHasKey(
+			'reason_note',
+			$this->refund( array( 'reason_note' => '   ' ) )['data']['attributes']
+		);
+	}
+
+	public function test_a_missing_reason_note_is_omitted(): void {
+		$document = WC_Edge_Order_Mapper::refund_document(
+			array(
+				'demand_id'       => 'demand-9',
+				'amount_cents'    => 1000,
+				'idempotency_key' => 'key-one',
+			)
+		);
+
+		$this->assertArrayNotHasKey( 'reason_note', $document['data']['attributes'] );
+	}
+
+	public function test_a_long_reason_note_is_truncated_to_the_backend_limit(): void {
+		$note = str_repeat( 'a', 600 );
+
+		$this->assertSame(
+			500,
+			strlen( $this->refund( array( 'reason_note' => $note ) )['data']['attributes']['reason_note'] )
+		);
+	}
+
+	public function test_a_multibyte_reason_note_is_never_split_mid_character(): void {
+		$note = str_repeat( 'é', 600 );
+
+		$sent = $this->refund( array( 'reason_note' => $note ) )['data']['attributes']['reason_note'];
+
+		$this->assertSame( $note !== $sent, true );
+		$this->assertSame( $sent, mb_convert_encoding( $sent, 'UTF-8', 'UTF-8' ) );
+	}
+
+	public function test_whitespace_in_a_reason_note_is_collapsed(): void {
+		$this->assertSame(
+			'Damaged in transit',
+			$this->refund( array( 'reason_note' => "  Damaged\n\tin   transit " ) )['data']['attributes']['reason_note']
+		);
+	}
 }

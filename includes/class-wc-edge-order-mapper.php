@@ -39,6 +39,16 @@ final class WC_Edge_Order_Mapper {
 	const MAX_SKU_LENGTH = 64;
 
 	/**
+	 * Longest refund note Edge accepts.
+	 *
+	 * An Edge constraint this time, not plugin policy:
+	 * `validate_length(:reason_note, max: 500)` on the backend changeset.
+	 *
+	 * @var int
+	 */
+	const MAX_REFUND_NOTE_LENGTH = 500;
+
+	/**
 	 * Build a `customers` creation document.
 	 *
 	 * @param string $name  Customer name.
@@ -171,6 +181,55 @@ final class WC_Edge_Order_Mapper {
 				'type'          => 'payment_demands',
 				'attributes'    => $attributes,
 				'relationships' => $relationships,
+			),
+		);
+	}
+
+	/**
+	 * Build a `refund_demands` creation document.
+	 *
+	 * There is no confirm step for a refund: creating one starts it. `reason` is
+	 * required by the backend and is always `custom` here, because WooCommerce's
+	 * refund reason is free text and cannot be mapped onto Edge's enum without
+	 * guessing; the text itself travels in `reason_note`.
+	 *
+	 * `amount_currency` is deliberately absent. The backend inherits it from the
+	 * payment demand and rejects a value that disagrees, so sending it can only
+	 * ever hurt.
+	 *
+	 * `amount_cents` is always sent. Omitting it means "refund the whole
+	 * remaining balance", which is the worst possible default for a call that
+	 * reached here with a malformed amount.
+	 *
+	 * @param array $args demand_id, amount_cents, idempotency_key and optionally
+	 *                    reason_note.
+	 * @return array
+	 */
+	public static function refund_document( array $args ) {
+		$attributes = array(
+			'reason'          => 'custom',
+			'amount_cents'    => (int) $args['amount_cents'],
+			'idempotency_key' => (string) $args['idempotency_key'],
+		);
+
+		$note = isset( $args['reason_note'] )
+			? self::text( $args['reason_note'], self::MAX_REFUND_NOTE_LENGTH )
+			: '';
+
+		// Sent as an absent key rather than an empty string: the backend's
+		// idempotent replay compares `reason_note` exactly, and "" and null are
+		// not the same value there.
+		if ( '' !== $note ) {
+			$attributes['reason_note'] = $note;
+		}
+
+		return array(
+			'data' => array(
+				'type'          => 'refund_demands',
+				'attributes'    => $attributes,
+				'relationships' => array(
+					'payment_demand' => self::identifier( 'payment_demands', $args['demand_id'] ),
+				),
 			),
 		);
 	}

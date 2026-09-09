@@ -170,4 +170,99 @@ class FingerprintTest extends TestCase {
 			\WC_Edge_Fingerprint::of( $facts )
 		);
 	}
+
+	private function refund_facts( array $overrides = array() ): array {
+		return array_merge(
+			array(
+				'demand_id'    => 'demand-9',
+				'mode'         => 'live',
+				'order_id'     => 17,
+				'refund_id'    => 42,
+				'amount_cents' => 1000,
+			),
+			$overrides
+		);
+	}
+
+	public function test_a_refund_key_is_stable_for_the_same_refund(): void {
+		$this->assertSame(
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts() ),
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts() )
+		);
+	}
+
+	public function test_a_refund_key_is_a_sha256_digest(): void {
+		$this->assertMatchesRegularExpression(
+			'/^[0-9a-f]{64}$/',
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts() )
+		);
+	}
+
+	public function test_a_refund_key_does_not_depend_on_array_order(): void {
+		$facts = $this->refund_facts();
+
+		$this->assertSame(
+			\WC_Edge_Fingerprint::for_refund( $facts ),
+			\WC_Edge_Fingerprint::for_refund( array_reverse( $facts, true ) )
+		);
+	}
+
+	/**
+	 * Two deliberate partial refunds of the same amount are different refunds,
+	 * and the WooCommerce refund row is what tells them apart.
+	 */
+	public function test_a_different_refund_row_rotates_the_key(): void {
+		$this->assertNotSame(
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts() ),
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts( array( 'refund_id' => 43 ) ) )
+		);
+	}
+
+	/**
+	 * @dataProvider refund_facts_that_matter
+	 */
+	public function test_changing_a_refund_fact_rotates_the_key( string $field, $value ): void {
+		$this->assertNotSame(
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts() ),
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts( array( $field => $value ) ) )
+		);
+	}
+
+	public static function refund_facts_that_matter(): array {
+		return array(
+			'payment demand' => array( 'demand_id', 'demand-8' ),
+			'mode'           => array( 'mode', 'sandbox' ),
+			'order'          => array( 'order_id', 18 ),
+			'amount'         => array( 'amount_cents', 1500 ),
+		);
+	}
+
+	/**
+	 * The note is deliberately not in the key: normalise() lowercases ordinary
+	 * strings while Edge compares reason_note byte-exactly, so including it
+	 * would let two notes differing only in case collide as a 422.
+	 */
+	public function test_a_refund_note_is_not_part_of_the_key(): void {
+		$this->assertSame(
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts() ),
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts( array( 'reason_note' => 'anything at all' ) ) )
+		);
+	}
+
+	public function test_a_refund_key_is_not_a_payment_key(): void {
+		$this->assertNotSame(
+			\WC_Edge_Fingerprint::of( $this->refund_facts() ),
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts() )
+		);
+	}
+
+	public function test_a_missing_refund_fact_is_the_same_as_an_empty_one(): void {
+		$facts = $this->refund_facts();
+		unset( $facts['mode'] );
+
+		$this->assertSame(
+			\WC_Edge_Fingerprint::for_refund( $facts ),
+			\WC_Edge_Fingerprint::for_refund( $this->refund_facts( array( 'mode' => '' ) ) )
+		);
+	}
 }

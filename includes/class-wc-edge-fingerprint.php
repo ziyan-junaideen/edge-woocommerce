@@ -68,6 +68,25 @@ final class WC_Edge_Fingerprint {
 	);
 
 	/**
+	 * Fields that identify one refund, in a fixed order.
+	 *
+	 * `reason_note` is deliberately absent. normalise() lowercases ordinary
+	 * strings, but Edge compares `reason_note` byte-exactly when it decides
+	 * whether a replayed key is the same request; two notes differing only in
+	 * case would hash to one key and collide as a 422. The WooCommerce refund id
+	 * already makes the key unique, and a note cannot change for a given row.
+	 *
+	 * @var string[]
+	 */
+	const REFUND_FIELDS = array(
+		'demand_id',
+		'mode',
+		'order_id',
+		'refund_id',
+		'amount_cents',
+	);
+
+	/**
 	 * Hash a set of payment facts.
 	 *
 	 * @param array $facts Raw values keyed by the names in self::FIELDS.
@@ -85,6 +104,34 @@ final class WC_Edge_Fingerprint {
 
 		// JSON of an ordered map, so the digest is stable across PHP versions and
 		// insertion order.
+		return hash( 'sha256', wp_json_encode( $normalised ) );
+	}
+
+	/**
+	 * Hash the facts of one refund.
+	 *
+	 * Refund idempotency is stricter than payment idempotency: replaying a key
+	 * with a different payment, amount, reason or note is rejected with a 422
+	 * rather than silently returning the original. So this digest does not have
+	 * to defend against a changed amount reaching an old key - it only has to be
+	 * the same value for the same refund, so a retry after an unclear outcome
+	 * replays instead of refunding twice, and a different value for a genuinely
+	 * different refund, so two deliberate partial refunds of the same amount are
+	 * not collapsed into one.
+	 *
+	 * @param array $facts Raw values keyed by the names in self::REFUND_FIELDS.
+	 * @return string 64 character hex digest.
+	 */
+	public static function for_refund( array $facts ) {
+		$normalised = array();
+
+		foreach ( self::REFUND_FIELDS as $field ) {
+			$normalised[ $field ] = self::normalise(
+				$field,
+				isset( $facts[ $field ] ) ? $facts[ $field ] : ''
+			);
+		}
+
 		return hash( 'sha256', wp_json_encode( $normalised ) );
 	}
 

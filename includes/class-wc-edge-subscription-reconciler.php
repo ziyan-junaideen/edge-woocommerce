@@ -35,10 +35,18 @@ final class WC_Edge_Subscription_Reconciler {
 	/**
 	 * Events worth receiving.
 	 *
-	 * Only codes the backend actually emits. `payment_demands.refunded`,
-	 * `.disputed` and the `refund_demands` terminal states are documented but
-	 * appear in no emit site, so subscribing to them would imply a reliability
-	 * this integration does not have.
+	 * Only codes the backend actually emits. `payment_demands.refunded` and
+	 * `.disputed` are documented but appear in no emit site - payment demands
+	 * lost their `refunded` state entirely - so subscribing to them would imply
+	 * a reliability the backend does not offer.
+	 *
+	 * A refund has no `.succeeded` event: both `pending -> processing` and
+	 * `processing -> succeeded` arrive as `.updated`, and the state has to be
+	 * read off the resource. `.created` is emitted too but is not subscribed to:
+	 * it is recorded inside the transaction that creates the refund, before the
+	 * response we are still waiting on has been rendered, so it is the delivery
+	 * most likely to arrive before this site has written down which refund it
+	 * just made. `.updated` and `.failed` carry every outcome that matters.
 	 *
 	 * @var string[]
 	 */
@@ -47,6 +55,8 @@ final class WC_Edge_Subscription_Reconciler {
 		'transaction.payment_demands.updated',
 		'transaction.payment_demands.succeeded',
 		'transaction.payment_demands.failed',
+		'transaction.refund_demands.updated',
+		'transaction.refund_demands.failed',
 	);
 
 	/**

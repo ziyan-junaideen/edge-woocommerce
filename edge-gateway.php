@@ -3,7 +3,7 @@
  * Plugin Name: Edge Payments Gateway
  * Plugin URI: https://github.com/Edge-Payment-Technologies/edge-woocommerce
  * Description: Adds the Edge Payments gateway to your WooCommerce website.
- * Version: 2.1.0
+ * Version: 2.2.0
  *
  * Author: Edge Payments
  * Author URI: https://tryedge.io
@@ -28,7 +28,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'WC_EDGE_VERSION', '2.1.0' );
+define( 'WC_EDGE_VERSION', '2.2.0' );
 define( 'WC_EDGE_PLUGIN_FILE', __FILE__ );
 
 /**
@@ -37,6 +37,13 @@ define( 'WC_EDGE_PLUGIN_FILE', __FILE__ );
  * @class WC_Edge_Payments
  */
 class WC_Edge_Payments {
+
+	/**
+	 * The refund row WooCommerce is in the middle of creating.
+	 *
+	 * @var WC_Order_Refund|null
+	 */
+	private static $claimed_refund = null;
 
 	/**
 	 * Plugin bootstrapping.
@@ -128,6 +135,8 @@ class WC_Edge_Payments {
 		require_once $path . 'class-wc-edge-logger.php';
 		require_once $path . 'class-wc-edge-cart-items.php';
 		require_once $path . 'class-wc-edge-payment-service.php';
+		require_once $path . 'class-wc-edge-refund-outcome.php';
+		require_once $path . 'class-wc-edge-refund-service.php';
 		require_once $path . 'class-wc-edge-rest-controller.php';
 		require_once $path . 'class-wc-edge-webhook-store.php';
 		require_once $path . 'class-wc-edge-webhook-controller.php';
@@ -145,6 +154,10 @@ class WC_Edge_Payments {
 
 		// Bind the pre-order attempt to the order the moment one exists.
 		add_action( 'woocommerce_store_api_checkout_order_processed', array( __CLASS__, 'adopt_attempt' ), 10, 1 );
+
+		// Hold on to the refund row WooCommerce is building, so process_refund()
+		// can identify it. See claim_refund().
+		add_action( 'woocommerce_create_refund', array( __CLASS__, 'claim_refund' ), 10, 2 );
 
 		self::maybe_upgrade_settings();
 
@@ -274,6 +287,59 @@ class WC_Edge_Payments {
 		$order->save();
 
 		WC_Edge_Attempt_Store::adopt( $attempt->attempt_key, $order->get_id() );
+	}
+
+	/**
+	 * Hold on to the refund row WooCommerce is about to save.
+	 *
+	 * WC_Payment_Gateway::process_refund() is handed an order id, an amount and
+	 * a reason - never the WC_Order_Refund itself - but the Edge idempotency key
+	 * has to be tied to something that identifies *this* refund and no other, or
+	 * two deliberate refunds of the same amount collapse into one.
+	 *
+	 * wc_create_refund() fires this before it saves the row and calls the
+	 * gateway afterwards, so the id is populated by the time claimed_refund()
+	 * reads it back - PHP hands the same object around, not a copy.
+	 *
+	 * @param WC_Order_Refund $refund Refund being created.
+	 * @param array           $args   Arguments wc_create_refund() was called with.
+	 * @return void
+	 */
+	public static function claim_refund( $refund, $args ) {
+		self::$claimed_refund = null;
+
+		if ( ! $refund instanceof WC_Order_Refund ) {
+			return;
+		}
+
+		// A manual refund never reaches a gateway, so claiming it would only
+		// leave a stale object behind for whatever runs next.
+		if ( empty( $args['refund_payment'] ) ) {
+			return;
+		}
+
+		self::$claimed_refund = $refund;
+	}
+
+	/**
+	 * Take the claimed refund row, if it belongs to this order.
+	 *
+	 * Single use: the claim is dropped as it is read, so a stale object can
+	 * never be handed to a later refund on a different order.
+	 *
+	 * @param int $order_id Order the refund must belong to.
+	 * @return WC_Order_Refund|null
+	 */
+	public static function claimed_refund( $order_id ) {
+		$refund = self::$claimed_refund;
+
+		self::$claimed_refund = null;
+
+		if ( ! $refund instanceof WC_Order_Refund ) {
+			return null;
+		}
+
+		return (int) $refund->get_parent_id() === (int) $order_id ? $refund : null;
 	}
 
 	/**

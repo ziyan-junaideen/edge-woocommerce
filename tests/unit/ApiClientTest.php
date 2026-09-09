@@ -33,7 +33,7 @@ class ApiClientTest extends TestCase {
 			self::SECRET,
 			array_merge(
 				array(
-					'user_agent' => 'EdgeWooCommerce/2.1.0',
+					'user_agent' => 'EdgeWooCommerce/2.2.0',
 					'verify_tls' => true,
 				),
 				$args
@@ -65,7 +65,7 @@ class ApiClientTest extends TestCase {
 		$this->assertSame( 'Bearer ' . self::SECRET, $request['args']['headers']['Authorization'] );
 		$this->assertSame( 'application/vnd.api+json', $request['args']['headers']['Accept'] );
 		$this->assertSame( 'application/vnd.api+json', $request['args']['headers']['Content-Type'] );
-		$this->assertSame( 'EdgeWooCommerce/2.1.0', $request['args']['user-agent'] );
+		$this->assertSame( 'EdgeWooCommerce/2.2.0', $request['args']['user-agent'] );
 		$this->assertSame( 'body', $request['args']['data_format'] );
 
 		$body = json_decode( $request['args']['body'], true );
@@ -487,5 +487,52 @@ class ApiClientTest extends TestCase {
 
 		// A JSON array, not an object keyed by index.
 		$this->assertStringContainsString( '"line_items":[{', $raw );
+	}
+
+	public function test_a_refund_reaches_the_wire_as_edge_expects_it(): void {
+		WC_Edge_Test_Transport::respond( 201, '{"data":{"id":"refund-1","type":"refund_demands"}}' );
+
+		$this->client()->create(
+			'refund_demands',
+			\WC_Edge_Order_Mapper::refund_document(
+				array(
+					'demand_id'       => 'demand-9',
+					'amount_cents'    => 1000,
+					'reason_note'     => 'Customer changed their mind.',
+					'idempotency_key' => 'refund-key-1',
+				)
+			)
+		);
+
+		$request = WC_Edge_Test_Transport::last();
+		$body    = json_decode( $request['args']['body'], true );
+
+		$this->assertSame( 'POST', $request['args']['method'] );
+		$this->assertSame( 'https://api.tryedge.io/v2/refund_demands', $request['url'] );
+
+		$this->assertSame(
+			array(
+				'type'          => 'refund_demands',
+				'attributes'    => array(
+					'reason'          => 'custom',
+					'amount_cents'    => 1000,
+					'idempotency_key' => 'refund-key-1',
+					'reason_note'     => 'Customer changed their mind.',
+				),
+				'relationships' => array(
+					'payment_demand' => array(
+						'data' => array(
+							'type' => 'payment_demands',
+							'id'   => 'demand-9',
+						),
+					),
+				),
+			),
+			$body['data']
+		);
+
+		// Idempotency is a body attribute here, not a header. A client that sent
+		// it as one would be silently non-idempotent.
+		$this->assertArrayNotHasKey( 'Idempotency-Key', $request['args']['headers'] );
 	}
 }

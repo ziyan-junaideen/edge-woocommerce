@@ -31,6 +31,15 @@ final class WC_Edge_Webhook_Controller {
 	const SIGNATURE_HEADER = 'x-hub-signature';
 
 	/**
+	 * Meta recording the last refund state applied to a refund row.
+	 *
+	 * Deliveries repeat, so this is what makes applying one twice a no-op.
+	 *
+	 * @var string
+	 */
+	const REFUND_STATE_META = '_edge_refund_state';
+
+	/**
 	 * Register the route.
 	 *
 	 * @return void
@@ -170,7 +179,15 @@ final class WC_Edge_Webhook_Controller {
 	 *                          releases the dedup claim and Edge can retry.
 	 */
 	private static function apply( array $event, $mode ) {
-		if ( 'transaction.payment_demands' !== $event['resource_type'] || '' === $event['resource_id'] ) {
+		if ( '' === $event['resource_id'] ) {
+			return 'unhandled';
+		}
+
+		if ( 'transaction.refund_demands' === $event['resource_type'] ) {
+			return self::apply_refund( $event, $mode );
+		}
+
+		if ( 'transaction.payment_demands' !== $event['resource_type'] ) {
 			return 'unhandled';
 		}
 
@@ -204,6 +221,263 @@ final class WC_Edge_Webhook_Controller {
 		self::record_risk_signals( $order, $demand );
 
 		return self::transition( $order, $state, $event['resource_id'] );
+	}
+
+	/**
+	 * Move an order in response to a refund demand event.
+	 *
+	 * A refund names its payment demand, and the payment demand is already the
+	 * order's binding, so the existing lookup does all the work - no second
+	 * index and no new meta to search on.
+	 *
+	 * @param array  $event Normalised event.
+	 * @param string $mode  Trusted mode.
+	 * @return string Outcome label.
+	 * @throws RuntimeException When the gateway is unavailable, or when the
+	 *                          refund is one this site is still in the middle of
+	 *                          creating, so the caller releases the dedup claim
+	 *                          and Edge retries.
+	 * @throws WC_Edge_API_Exception When the refund cannot be read for a reason
+	 *                          that a retry could still fix.
+	 */
+	private static function apply_refund( array $event, $mode ) {
+		$gateway = self::gateway();
+
+		if ( ! $gateway instanceof WC_Gateway_Edge ) {
+			throw new RuntimeException( 'Edge gateway unavailable while handling a refund webhook.' );
+		}
+
+		$api = WC_Edge_Client_Factory::client( $gateway->get_secret_key() );
+
+		// Authoritative read, for the same reason payment demands get one: the
+		// signature covers the delivery, not the body.
+		//
+		// Unlike the payment branch this happens before the order lookup, since
+		// the refund is what names the payment demand the order is bound to. So
+		// a refund belonging to another mode or another merchant reaches here,
+		// and its 404 has to end the delivery rather than escape as a 500 - a
+		// subscription for the mode the gateway is no longer configured for goes
+		// on delivering, and every retry would be another round trip.
+		try {
+			$document = $api->get( 'refund_demands/' . rawurlencode( $event['resource_id'] ) );
+		} catch ( WC_Edge_API_Exception $e ) {
+			$status = $e->get_status_code();
+
+			if ( 404 === $status || 403 === $status ) {
+				WC_Edge_Logger::info( 'Refund ' . $event['resource_id'] . ' is not readable with these keys; not ours.' );
+
+				return 'unknown-refund';
+			}
+
+			throw $e;
+		}
+
+		$demand_id = WC_Edge_Refund_Outcome::payment_demand_id( $document );
+
+		if ( '' === $demand_id ) {
+			return 'unknown-refund';
+		}
+
+		$order = self::find_order( $demand_id, $mode );
+
+		if ( ! $order ) {
+			return 'unknown-order';
+		}
+
+		WC_Edge_Webhook_Store::attach_order( $event['id'], $order->get_id() );
+
+		$refund_demand = isset( $document->data ) ? $document->data : null;
+		$state         = WC_Edge_Refund_Outcome::state_of( $refund_demand );
+		$refund        = self::find_refund( $order, $event['resource_id'] );
+
+		if ( ! $refund ) {
+			$key = isset( $refund_demand->attributes->idempotency_key )
+				? (string) $refund_demand->attributes->idempotency_key
+				: '';
+
+			// Edge records the created event inside the transaction that creates
+			// the refund, so an event can overtake the response that would have
+			// told us which refund we just made. The key was written down before
+			// the request went out, so it says "this is ours, we are just not
+			// finished writing it down". Throwing releases the claim; returning
+			// 200 would consume it and lose the event for good.
+			$pending = WC_Edge_Refund_Service::pending( $order );
+
+			if ( '' !== $key && isset( $pending[ $key ] ) ) {
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Diagnostic text for the log; the caller turns this into a bare 500.
+				throw new RuntimeException( 'Refund ' . $event['resource_id'] . ' is still being recorded.' );
+			}
+
+			return self::note_foreign_refund( $order, $event['resource_id'], $refund_demand, $state );
+		}
+
+		return self::transition_refund( $order, $refund, $event['resource_id'], $state );
+	}
+
+	/**
+	 * Apply a refund state to the WooCommerce refund it belongs to.
+	 *
+	 * Nothing here changes the order's status. WooCommerce set that when the
+	 * refund row was created, and a refund demand reaching a terminal state is
+	 * news about money, not about the order's lifecycle.
+	 *
+	 * @param WC_Order        $order     Order.
+	 * @param WC_Order_Refund $refund    WooCommerce refund row.
+	 * @param string          $refund_id Edge refund demand id.
+	 * @param string          $state     Authoritative refund state.
+	 * @return string Outcome label.
+	 */
+	private static function transition_refund( WC_Order $order, WC_Order_Refund $refund, $refund_id, $state ) {
+		$recorded = (string) $refund->get_meta( self::REFUND_STATE_META );
+
+		if ( $recorded === $state ) {
+			// Deliveries repeat and arrive out of order; saying so twice on the
+			// order would be noise.
+			return 'already-recorded';
+		}
+
+		switch ( $state ) {
+			case 'succeeded':
+				$refund->update_meta_data( self::REFUND_STATE_META, $state );
+				$refund->delete_meta_data( WC_Edge_Refund_Service::FAILED_META );
+				$refund->save();
+
+				// The order-level marker stands for every refund on the order, so
+				// one succeeding does not clear a sibling's failure.
+				if ( ! self::has_failed_refund( $order ) ) {
+					$order->delete_meta_data( WC_Edge_Refund_Service::FAILED_META );
+				}
+
+				$order->add_order_note(
+					sprintf(
+						/* translators: 1: refund amount, 2: Edge refund demand id. */
+						__( 'Edge confirmed the refund of %1$s (%2$s).', 'edge-gateway' ),
+						wc_price( $refund->get_amount(), array( 'currency' => $order->get_currency() ) ),
+						$refund_id
+					)
+				);
+				$order->save();
+
+				return 'refund-succeeded';
+
+			case 'failed':
+				$refund->update_meta_data( self::REFUND_STATE_META, $state );
+				$refund->update_meta_data( WC_Edge_Refund_Service::FAILED_META, 'yes' );
+				$refund->save();
+
+				$order->update_meta_data( WC_Edge_Refund_Service::FAILED_META, 'yes' );
+				$order->add_order_note(
+					sprintf(
+						/* translators: 1: refund amount, 2: Edge refund demand id. */
+						__( 'Edge could not process the refund of %1$s (%2$s). The money was NOT returned to the customer, but WooCommerce has already recorded the refund, restocked the items and emailed the customer. Delete the refund on this order to put the balance and the stock back, then decide whether to try again.', 'edge-gateway' ),
+						wc_price( $refund->get_amount(), array( 'currency' => $order->get_currency() ) ),
+						$refund_id
+					)
+				);
+				$order->save();
+
+				return 'refund-failed';
+
+			case 'pending':
+			case 'processing':
+				$refund->update_meta_data( self::REFUND_STATE_META, $state );
+				$refund->save();
+
+				return 'no-change';
+
+			default:
+				$refund->update_meta_data( self::REFUND_STATE_META, $state );
+				$refund->save();
+
+				$order->add_order_note(
+					sprintf(
+						/* translators: %s: unrecognised refund state. */
+						__( 'Edge reported an unrecognised refund state: %s.', 'edge-gateway' ),
+						$state
+					)
+				);
+				$order->save();
+
+				return 'unrecognised-state';
+		}
+	}
+
+	/**
+	 * Record a refund this site did not create.
+	 *
+	 * Refunds can be issued from the Edge dashboard. No WooCommerce refund is
+	 * synthesised for one: creating order state from a webhook would restock and
+	 * email on Edge's schedule rather than the merchant's. The note is enough to
+	 * reconcile from.
+	 *
+	 * @param WC_Order $order         Order.
+	 * @param string   $refund_id     Edge refund demand id.
+	 * @param mixed    $refund_demand Decoded refund resource.
+	 * @param string   $state         Refund state.
+	 * @return string Outcome label.
+	 */
+	private static function note_foreign_refund( WC_Order $order, $refund_id, $refund_demand, $state ) {
+		// A refund passes through processing on its way to a terminal state, and
+		// both arrive as `.updated`. Noting only the outcome keeps one dashboard
+		// refund to one order note.
+		if ( 'succeeded' !== $state && 'failed' !== $state ) {
+			return 'no-change';
+		}
+
+		$cents = isset( $refund_demand->attributes->amount_cents )
+			? (int) $refund_demand->attributes->amount_cents
+			: 0;
+
+		$order->add_order_note(
+			sprintf(
+				/* translators: 1: refund amount, 2: refund state, 3: Edge refund demand id. */
+				__( 'Edge reported a refund of %1$s (%2$s) that was not created in WooCommerce: %3$s. Reconcile it here if it should show on this order.', 'edge-gateway' ),
+				wc_price( WC_Edge_Money::from_cents( $cents ), array( 'currency' => $order->get_currency() ) ),
+				$state,
+				$refund_id
+			)
+		);
+		$order->save();
+
+		return 'foreign-refund';
+	}
+
+	/**
+	 * Whether any refund on the order is still marked failed.
+	 *
+	 * @param WC_Order $order Order.
+	 * @return bool
+	 */
+	private static function has_failed_refund( WC_Order $order ) {
+		foreach ( $order->get_refunds() as $refund ) {
+			if ( $refund instanceof WC_Order_Refund
+				&& 'yes' === $refund->get_meta( WC_Edge_Refund_Service::FAILED_META ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * The WooCommerce refund row standing for an Edge refund demand.
+	 *
+	 * @param WC_Order $order     Order.
+	 * @param string   $refund_id Edge refund demand id.
+	 * @return WC_Order_Refund|null
+	 */
+	private static function find_refund( WC_Order $order, $refund_id ) {
+		foreach ( $order->get_refunds() as $refund ) {
+			if ( ! $refund instanceof WC_Order_Refund ) {
+				continue;
+			}
+
+			if ( (string) $refund->get_meta( WC_Edge_Refund_Service::DEMAND_META ) === (string) $refund_id ) {
+				return $refund;
+			}
+		}
+
+		return null;
 	}
 
 	/**

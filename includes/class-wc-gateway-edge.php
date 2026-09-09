@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Edge Gateway.
  *
  * @class    WC_Gateway_Edge
- * @version  2.1.0
+ * @version  2.2.0
  */
 class WC_Gateway_Edge extends WC_Payment_Gateway {
 
@@ -53,10 +53,11 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 
 		$this->icon = apply_filters( 'woocommerce_edge_gateway_icon', '' );
 
-		// Refunds and subscriptions are deliberately absent: neither can be
-		// implemented correctly against the current Edge v2 contract. See the
-		// migration plan for the upstream prerequisites.
-		$this->supports = array( 'products' );
+		// Subscriptions are deliberately absent: recurring billing has no
+		// counterpart in the flow this gateway implements. Refunds are supported
+		// against Edge's `refund_demands` resource - full and partial, and
+		// idempotent so a retry cannot pay twice.
+		$this->supports = array( 'products', 'refunds' );
 
 		$this->method_title       = _x( 'Edge Payments', 'Edge payments method', 'edge-gateway' );
 		$this->method_description = __( 'Accept card payments through Edge. Requires the block-based checkout.', 'edge-gateway' );
@@ -462,6 +463,36 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 			'result'   => 'success',
 			'redirect' => $this->get_return_url( $order ),
 		);
+	}
+
+	/**
+	 * Refund a payment through Edge.
+	 *
+	 * Thin on purpose - the decisions live in WC_Edge_Refund_Service, the same
+	 * way process_payment() leaves them to WC_Edge_Payment_Service.
+	 *
+	 * Returning true does not mean the money has moved. Edge accepts a refund as
+	 * `pending` and confirms it later on the webhook; WooCommerce, meanwhile,
+	 * treats a true return as final and will already have restocked, revoked
+	 * downloads and emailed the customer. A refund that later fails is therefore
+	 * reported on the order rather than unwound.
+	 *
+	 * @param int    $order_id Order ID.
+	 * @param float  $amount   Amount to refund.
+	 * @param string $reason   Merchant's reason for the refund.
+	 * @return bool|WP_Error
+	 */
+	public function process_refund( $order_id, $amount = null, $reason = '' ) {
+		$order = wc_get_order( $order_id );
+
+		if ( ! $order instanceof WC_Order ) {
+			return new WP_Error(
+				'edge_order_missing',
+				__( 'That order could not be found.', 'edge-gateway' )
+			);
+		}
+
+		return WC_Edge_Refund_Service::refund( $this, $order, $amount, $reason );
 	}
 
 	/**

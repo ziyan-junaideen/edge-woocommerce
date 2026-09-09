@@ -68,6 +68,9 @@ includes/
   class-wc-edge-order-mapper.php     builds the JSON:API request documents; pure, so the exact bytes
                                      sent to Edge are unit-testable
   class-wc-edge-payment-service.php  orchestration: prepare() and confirm()
+  class-wc-edge-refund-outcome.php   pure: what a refund response meant, and which refund in a
+                                     listing is ours. The judgement calls, so they are testable
+  class-wc-edge-refund-service.php   orchestration: refund(), full and partial
   class-wc-edge-rest-controller.php  POST /wp-json/edge/v1/checkout-intent
   class-wc-edge-subscription-reconciler.php
                                      reconciles this site's Edge *webhook* subscription (nothing to
@@ -86,7 +89,7 @@ webpack.config.js                    externalises @woocommerce/* to wc.wcBlocksR
 bin/build-release.sh                 release ZIP: sources + built JS, no vendor/, no prefixing
 bin/build_i18n.sh                    JSON translations; needs a global `wp` binary
 tests/bootstrap.php                  WordPress shims, including a fake wp_remote_request()
-tests/unit/                          the suite (232 tests as of 2026-09-09)
+tests/unit/                          the suite (282 tests as of 2026-09-09)
 ```
 
 `assets/`, `languages/`, `vendor/`, `node_modules/`, `dist/` and `composer.lock`
@@ -314,15 +317,131 @@ verification having happened at all.
    `wp_edge_webhook_events`, and only then move the order.
 
 Subscribed events are `transaction.payment_demands.created`, `.updated`,
-`.succeeded` and `.failed` — the only codes the backend actually emits.
-`payment_demands.refunded`, `.disputed` and the `refund_demands` terminal states
-are documented but appear in no emit site, so subscribing to them would imply a
-reliability the backend does not offer.
+`.succeeded` and `.failed`, plus `transaction.refund_demands.updated` and
+`.failed` — the codes the backend actually emits and this plugin acts on.
+
+`payment_demands.refunded` and `.disputed` are still listed as subscribable but
+have no emit site: payment demands **lost their `refunded` processor state**
+entirely (ept `8693770ba`, migration `20260827052053`), and refund accounting is
+now derived from the refund demands themselves. The `case 'refunded':` branch in
+`WC_Edge_Webhook_Controller::transition()` is therefore unreachable for anything
+new; it is kept only so a replayed historical delivery still lands somewhere.
+
+`transaction.refund_demands.created` is emitted but deliberately **not**
+subscribed to. Edge records it inside the transaction that creates the refund —
+before the HTTP response this plugin is still waiting on has been rendered — so
+it is the delivery most likely to arrive before WordPress has written down which
+refund it just made. `.updated` and `.failed` carry every outcome that matters.
 
 `WC_Edge_Subscription_Reconciler` reconciles the existing
 `webhook_subscriptions` resource rather than creating one, because saving
 settings must be repeatable; creating on every save would leave a trail of
 duplicates all delivering the same events.
+
+### Refunds
+
+`$this->supports` includes `'refunds'`, and the WooCommerce refund form drives
+`WC_Gateway_Edge::process_refund()` -> `WC_Edge_Refund_Service::refund()`. Full
+and partial refunds both work; the decisions worth being wrong about live in the
+pure `WC_Edge_Refund_Outcome`.
+
+Routes are `GET/POST /v2/refund_demands` and `GET /v2/refund_demands/{id}`.
+**There is no confirm step** — unlike a payment demand, creating a refund demand
+starts it. There is no cancel or void either.
+
+The create document:
+
+```json
+{ "data": {
+    "type": "refund_demands",
+    "attributes": {
+      "reason": "custom",
+      "reason_note": "Customer changed their mind.",
+      "amount_cents": 1000,
+      "idempotency_key": "..."
+    },
+    "relationships": {
+      "payment_demand": { "data": { "id": "<uuid>", "type": "payment_demands" } }
+    }
+} }
+```
+
+- `reason` is **required**. This plugin always sends `custom`: WooCommerce's
+  refund reason is free text and cannot be mapped onto Edge's enum without
+  guessing. The text itself goes in `reason_note` (**not** `refund_note`), which
+  the backend caps at 500 characters.
+- `amount_cents` is optional upstream — omitting it refunds the whole remaining
+  balance — but this plugin **always sends it**. `wc_create_refund()` always has
+  a concrete amount, so the omit path would only ever fire on a malformed call,
+  where refunding everything is the worst available default.
+- Never send `amount_currency`. It is inherited from the payment demand and a
+  value that disagrees is a 422.
+- The payment demand must be in `processor_state: succeeded`. The plugin does
+  not read that field: `assert_refundable()` approximates it with
+  `get_date_paid() || is_paid()`, which catches the ordinary on-hold order
+  without a round trip. An order moved to Completed by hand passes the local
+  check and is refused by Edge with a 422 instead.
+
+Partial refunds accumulate against the payment total. `pending`, `processing` and
+`succeeded` refunds each **reserve** their amount; a `failed` refund releases its
+reservation. Exceeding the balance is a 422 (`greater than the unrefunded
+amount`, or `has already been fully refunded`), and the cap is serialised behind
+a `SELECT ... FOR UPDATE` on the payment demand.
+
+Refund states are `pending -> processing -> succeeded | failed`. There is no
+`errored` state any more (ept `d965ef2f6`).
+
+**Refund idempotency is not payment idempotency.** Both are a body attribute,
+`data.attributes.idempotency_key`, and neither is an HTTP header — but a refund
+key replayed with a *different* payment, amount, reason or note is **rejected
+with 422** (`has already been used for a different refund request`), where a
+payment demand would silently return the original. Refunds therefore do not carry
+the trap described below for `payment_demands`. A matching replay returns the
+original refund, still **201**, and enqueues no second job, event or delivery.
+Keys are scoped to the merchant.
+
+The key comes from `WC_Edge_Fingerprint::for_refund()` over the payment demand,
+mode, order id, **WooCommerce refund row id** and amount. The refund row id is
+what makes two deliberate partial refunds of the same amount distinct while an
+in-call retry stays identical. `reason_note` is deliberately excluded: the shared
+`normalise()` lowercases ordinary strings, and Edge compares the note exactly, so
+including it would let two notes differing only in case collide as a 422.
+
+`process_refund()` is handed an order id, an amount and a reason — never the
+`WC_Order_Refund`. `WC_Edge_Payments::claim_refund()` hooks
+`woocommerce_create_refund`, which fires with the object *before* it is saved and
+before the gateway is called, so the same object handle has an id by the time
+`claimed_refund()` reads it back. The claim is single use. If it is missing —
+something other than the refund form called the gateway — the refund is refused
+rather than guessed at, because a key attached to the wrong refund is worse than
+no refund.
+
+Meta written: `_edge_refund_demand_id`, `_edge_refund_idempotency_key` and
+`_edge_refund_state` on the `WC_Order_Refund`, `_edge_refund_failed` on both the
+refund row and its order, and `_edge_refund_pending` on the order — a list keyed
+by idempotency key, written *before* the request goes out, holding refunds sent
+but not yet accounted for.
+
+Note that `WC_Order_Refund` extends `WC_Abstract_Order`, not `WC_Order`, so it
+has **no `set_transaction_id()`**. Calling it is a fatal. Ids go in meta.
+
+Two limits are known and deliberate:
+
+- **`_edge_refund_pending` is a read-modify-write of one serialised order meta
+  value, with no lock.** Two refunds started on the same order at the same moment
+  can lose one another's record, and two concurrent refunds get different
+  WooCommerce row ids and so different idempotency keys — meaning both can be
+  accepted while balance remains. `pending_duplicate()` catches the sequential
+  case only. Closing this properly needs a unique constraint, the way
+  `WC_Edge_Attempt_Store` does it for concurrent checkout prepares.
+- **Nothing reconciles the webhook subscription on upgrade.**
+  `WC_Edge_Subscription_Reconciler::reconcile()` runs only from
+  `process_admin_options()`, so a site that had 2.1.0 keeps a subscription
+  carrying just the four `payment_demands` codes until someone re-saves the
+  gateway settings. Until then refunds still go out and succeed, but a refund
+  that *fails* is never reported. This is accepted because the plugin has not
+  shipped refunds; if that changes, it needs a version-stamped one-time
+  reconcile.
 
 ### Invariants that break silently
 
@@ -361,6 +480,36 @@ duplicates all delivering the same events.
   `WC_Edge_Client_Factory::client()` throws rather than allow it.
 - HPOS is declared, and claimed only because it has been exercised. All order
   reads and writes go through the CRUD API — never `update_post_meta()`.
+- A refund is only **`pending`** when `process_refund()` returns `true`, and by
+  then WooCommerce has already treated it as final: it marks the row refunded,
+  **restocks the line items, revokes downloads, fires the refunded actions (which
+  email the customer) and can move the order to `refunded`**
+  (`wc-order-functions.php`). None of that is undone when the refund later fails,
+  and `get_remaining_refund_amount()` keeps counting the failed row. The failure
+  webhook therefore reports loudly rather than correcting silently, and the note
+  tells the merchant to delete the refund row to put the balance and stock back.
+  Waiting for a terminal state instead would block an admin request on Edge's job
+  pipeline for an unbounded time.
+- A 2xx from `create()` is **not** proof a refund exists.
+  `WC_Edge_API_Client::decode()` answers an empty body with a bare `stdClass` and
+  throws on a truncated one carrying the 2xx status, so anything that leaves us
+  unable to name the refund is ambiguous — never a failure. A failure sends the
+  merchant round again with a fresh key; ambiguity is resolved by replaying the
+  same key, then by looking the key up in
+  `GET /v2/refund_demands?filter[payment_demand]=...`.
+- Never fall through from "an earlier refund was found unaccounted for" into a
+  new refund request. WooCommerce **deletes** its refund row whenever the gateway
+  returns a `WP_Error`, so the merchant's retry arrives with a new row id and
+  therefore a new idempotency key. Sending that while an unaccounted refund is
+  still reserving its amount is how a partial refund gets paid twice — the
+  backend's balance cap does not catch it while there is balance left.
+- `_edge_refund_pending` may only be cleared on **positive knowledge**: a refund
+  was named, or a listing that was actually fetched does not contain the key.
+  "Could not look" and "not there" are different answers, which is why
+  `look_up()` returns `read` alongside `found`. In particular, a refusal that
+  arrives *after* an unclear reply says nothing about what the first request did,
+  so `send()` tracks whether it has ever been unsure and refuses to treat a late
+  4xx as proof that nothing exists.
 
 ### Test cards
 
@@ -412,7 +561,7 @@ codebase; do not reintroduce it.
   plugin header, the `WC_EDGE_VERSION` constant just below it, `package.json`,
   the `@version` docblock on `WC_Gateway_Edge`, and the `WC_EDGE_VERSION` shim in
   `tests/bootstrap.php`. `ApiClientTest` additionally pins the user agent as a
-  literal (`EdgeWooCommerce/2.1.0`, twice); `ClientFactoryTest` derives it from
+  literal (`EdgeWooCommerce/2.2.0`, twice); `ClientFactoryTest` derives it from
   the constant. Per-file `@since` tags record when a class was introduced and do
   not move.
 
@@ -434,3 +583,11 @@ For manual end-to-end work, use a sandbox key pair and a disposable order, and
 cover at least: success, decline, an expired or invalid iframe state, double
 submit, page reload mid-checkout, an API failure, and a delayed or duplicated
 webhook. Never test against live credentials or real card data.
+
+For a refund change, also cover: a partial refund, a second partial that settles
+the balance, a full refund, an over-refund (which has to be provoked from outside
+WooCommerce — once WooCommerce believes an order is fully refunded,
+`wc_create_refund()` refuses before the gateway ever runs), a refund on an order
+Edge has not confirmed, a replayed idempotency key, a key replayed with a changed
+note, a refund that reaches `failed`, and a refund event delivered before
+WordPress has recorded which refund it made.
