@@ -102,6 +102,7 @@ final class WC_Edge_Logger {
 			'secret_key',
 			'publishable_key',
 			'authorization',
+			'edge-signature',
 			'x-hub-signature',
 			'signature',
 			'card_pan_token',

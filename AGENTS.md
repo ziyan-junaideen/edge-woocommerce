@@ -75,6 +75,8 @@ includes/
   class-wc-edge-subscription-reconciler.php
                                      reconciles this site's Edge *webhook* subscription (nothing to
                                      do with WooCommerce Subscriptions)
+  class-wc-edge-webhook-signature.php
+                                     pure: verifies the v3 `edge-signature` HMAC on a delivery
   class-wc-edge-webhook-controller.php
                                      POST /wp-json/edge/v1/webhook — the authoritative outcome
   class-wc-edge-webhook-store.php    custom table wp_edge_webhook_events: dedupe + serialise delivery
@@ -89,7 +91,7 @@ webpack.config.js                    externalises @woocommerce/* to wc.wcBlocksR
 bin/build-release.sh                 release ZIP: sources + built JS, no vendor/, no prefixing
 bin/build_i18n.sh                    JSON translations; needs a global `wp` binary
 tests/bootstrap.php                  WordPress shims, including a fake wp_remote_request()
-tests/unit/                          the suite (282 tests as of 2026-09-09)
+tests/unit/                          the suite (303 tests as of 2026-09-09)
 ```
 
 `assets/`, `languages/`, `vendor/`, `node_modules/`, `dist/` and `composer.lock`
@@ -246,6 +248,48 @@ The dev publishable token is in `AGENTS.local.md`. Secret keys are never recorde
 in this repo — take one from the Edge dashboard's Developers tab and put it in the
 gateway settings.
 
+**On a 401 against the local backend**, the merchant's tokens have been rotated
+out from under the site. Mint a fresh set from the ept repo:
+
+```bash
+cd /Volumes/Dev/Work/Edge/edge/ept
+mise exec -- mix core.generate_merchant_tokens_for "Edge"
+```
+
+The last five lines are the four tokens:
+
+```
+Edge:
+Live/Publishable: ept_live_b…
+Live/Secret: ept_live_s…
+Sandbox/Publishable: ept_sandbox_b…
+Sandbox/Secret: ept_sandbox_s…
+```
+
+Two things to know before running it. It **rotates**: every run invalidates the
+previous set, so capture the output rather than re-running to look again, and
+expect to re-enter the keys anywhere else that holds them. And the local backend
+uses the **live** pair — `AGENTS.local.md` records an `ept_live_b…` token for
+`api.tryedge.test:4001`, and the seeded orders there are `_edge_mode: live`. That
+is the dev merchant, not production; what separates them is the API host, not the
+key prefix. The "never test against live credentials" rule is about
+`api.tryedge.io`.
+
+Put the pair in the gateway settings, then reconcile the webhook subscription —
+the stored one belongs to the previous merchant:
+
+```bash
+cd /Users/jdeen/Studio/my-wordpress-website
+studio wp eval 'delete_option( "wc_edge_webhook_subscriptions" );
+  $g = WC()->payment_gateways->payment_gateways()["edge"];
+  $r = WC_Edge_Subscription_Reconciler::reconcile( $g );
+  echo is_wp_error( $r ) ? $r->get_error_message() : "ok", "\n";'
+```
+
+Read the result back **through the API**, never by printing
+`wc_edge_webhook_subscriptions` — that option holds the webhook signing secret
+and does not store the event list anyway.
+
 ### Environment overrides
 
 All of these are `wp-config.php` constants, never stored settings — an
@@ -313,7 +357,7 @@ verification having happened at all.
    **on-hold**. Confirming means Edge accepted the payment for processing, not
    that it succeeded, so the order is never completed here.
 8. `POST /wp-json/edge/v1/webhook` is the authoritative outcome. Deliveries are
-   signature-verified (`x-hub-signature`), deduplicated and serialised through
+   signature-verified (`edge-signature`), deduplicated and serialised through
    `wp_edge_webhook_events`, and only then move the order.
 
 Subscribed events are `transaction.payment_demands.created`, `.updated`,
@@ -332,6 +376,32 @@ subscribed to. Edge records it inside the transaction that creates the refund �
 before the HTTP response this plugin is still waiting on has been rendered — so
 it is the delivery most likely to arrive before WordPress has written down which
 refund it just made. `.updated` and `.failed` carry every outcome that matters.
+
+### Webhook signatures
+
+Deliveries are signed with **delivery version v3** and nothing else is accepted.
+Every merchant on the backend is on v3 (`merchants.webhook_delivery_version`,
+verified 2026-09-09: 39 of 39).
+
+```
+edge-signature: t=<unix seconds>,v3=<lowercase hex sha256>
+```
+
+The signed payload is `"<timestamp>.<raw body>"`, HMAC-SHA256 keyed with the
+subscription's `secret_key` (`ept lib/req/plugin/webhook_signature.ex`). Verify
+against `WP_REST_Request::get_body()`, **not** the parsed body — JSON key order
+is not stable, so re-encoding a decoded payload does not reproduce the bytes that
+were signed. The timestamp is inside the signed payload, and
+`SIGNATURE_TOLERANCE` (300s) is what stops an intact delivery being replayed
+later.
+
+Unknown tokens in the header are skipped rather than treated as malformed: Edge
+documents that a future scheme would be rolled out by emitting `v4` alongside
+`v3` for a migration window.
+
+The legacy `x-hub-signature` — a constant `base64(sha1(secret_key))`, with the
+body not an input — is **no longer accepted**. It was a bearer token rather than
+a signature. Anything still sending it will be rejected, which is intended.
 
 `WC_Edge_Subscription_Reconciler` reconciles the existing
 `webhook_subscriptions` resource rather than creating one, because saving
@@ -561,7 +631,7 @@ codebase; do not reintroduce it.
   plugin header, the `WC_EDGE_VERSION` constant just below it, `package.json`,
   the `@version` docblock on `WC_Gateway_Edge`, and the `WC_EDGE_VERSION` shim in
   `tests/bootstrap.php`. `ApiClientTest` additionally pins the user agent as a
-  literal (`EdgeWooCommerce/2.2.0`, twice); `ClientFactoryTest` derives it from
+  literal (`EdgeWooCommerce/2.3.0`, twice); `ClientFactoryTest` derives it from
   the constant. Per-file `@since` tags record when a class was introduced and do
   not move.
 
@@ -591,3 +661,17 @@ WooCommerce — once WooCommerce believes an order is fully refunded,
 Edge has not confirmed, a replayed idempotency key, a key replayed with a changed
 note, a refund that reaches `failed`, and a refund event delivered before
 WordPress has recorded which refund it made.
+
+Two things make that practical against the local backend:
+
+- **Forcing a failed refund.** `Core.EdgeAuthorizeRefundJob` declines the refund
+  when the payment method's `last_four` is `"5126"` and succeeds otherwise, so a
+  refund can be driven to `failed` by setting that column on the demand's payment
+  method for the duration of the test. Put it back afterwards.
+- **Getting a refundable payment without the hosted form.** The card iframe is
+  cross-origin and cannot be driven from the agent side, so bind a disposable
+  order to a payment demand that is already `succeeded` — set `_edge_demand_id`,
+  `_edge_mode`, `_edge_amount_cents` and `_edge_currency` and call
+  `payment_complete()`, which is the state `adopt_attempt()` would have left. List
+  the merchant's demands with `GET /v2/payment_demands`; the local database is
+  reset from time to time, so demands referenced by older orders will 404.

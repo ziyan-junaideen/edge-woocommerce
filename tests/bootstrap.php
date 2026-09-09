@@ -14,7 +14,7 @@
  */
 
 define( 'WC_EDGE_TESTING', true );
-define( 'WC_EDGE_VERSION', '2.2.0' );
+define( 'WC_EDGE_VERSION', '2.3.0' );
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -233,3 +233,4 @@ require_once __DIR__ . '/../includes/class-wc-edge-fingerprint.php';
 require_once __DIR__ . '/../includes/class-wc-edge-order-mapper.php';
 require_once __DIR__ . '/../includes/class-wc-edge-cart-items.php';
 require_once __DIR__ . '/../includes/class-wc-edge-refund-outcome.php';
+require_once __DIR__ . '/../includes/class-wc-edge-webhook-signature.php';

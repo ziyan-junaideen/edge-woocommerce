@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Edge Gateway.
  *
  * @class    WC_Gateway_Edge
- * @version  2.2.0
+ * @version  2.3.0
  */
 class WC_Gateway_Edge extends WC_Payment_Gateway {
 

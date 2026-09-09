@@ -26,9 +26,11 @@ final class WC_Edge_Webhook_Controller {
 	/**
 	 * Header carrying Edge's signature.
 	 *
+	 * The scheme itself lives in WC_Edge_Webhook_Signature.
+	 *
 	 * @var string
 	 */
-	const SIGNATURE_HEADER = 'x-hub-signature';
+	const SIGNATURE_HEADER = WC_Edge_Webhook_Signature::HEADER;
 
 	/**
 	 * Meta recording the last refund state applied to a refund row.
@@ -72,7 +74,11 @@ final class WC_Edge_Webhook_Controller {
 	 */
 	public static function handle( WP_REST_Request $request ) {
 		$signature = (string) $request->get_header( self::SIGNATURE_HEADER );
-		$mode      = self::trusted_mode( $signature );
+
+		// The raw bytes, not the parsed body: the signature covers what was sent,
+		// and re-encoding a decoded payload does not reproduce it - JSON key
+		// order is not stable.
+		$mode = self::trusted_mode( $signature, $request->get_body() );
 
 		if ( null === $mode ) {
 			// Never log the supplied signature: it is a bearer credential.
@@ -111,26 +117,33 @@ final class WC_Edge_Webhook_Controller {
 	/**
 	 * Work out which mode a delivery belongs to from its signature.
 	 *
-	 * The signature is compared against every stored subscription secret, and
-	 * the one that matches decides the mode. The payload also carries a `mode`,
-	 * but it is unauthenticated, so using it to choose which API key to trust
-	 * would let a caller pick their own credentials.
+	 * The signature is checked against every stored subscription secret, and the
+	 * one that verifies decides the mode. The payload also carries a `mode`, but
+	 * it is unauthenticated, so using it to choose which API key to trust would
+	 * let a caller pick their own credentials.
 	 *
-	 * Note this signature is `base64(sha1(secret))` - a constant per
-	 * subscription, with the body not an input. It is a bearer token, not proof
-	 * of integrity, which is exactly why the resource is re-fetched below.
-	 *
-	 * @param string $signature Supplied signature.
+	 * @param string $signature Supplied `edge-signature` header.
+	 * @param string $body      Raw request body, exactly as received.
 	 * @return string|null Trusted mode, or null.
 	 */
-	private static function trusted_mode( $signature ) {
-		if ( '' === $signature ) {
+	private static function trusted_mode( $signature, $body ) {
+		$parsed = WC_Edge_Webhook_Signature::parse( $signature );
+
+		if ( ! $parsed ) {
+			return null;
+		}
+
+		// The timestamp is signed, so a delivery cannot be back-dated - but an
+		// intact one could still be captured and replayed, which is what the
+		// freshness window closes.
+		if ( ! WC_Edge_Webhook_Signature::is_fresh( $parsed['timestamp'], time() ) ) {
+			WC_Edge_Logger::error( 'Rejected a webhook whose timestamp is outside the accepted window.' );
+
 			return null;
 		}
 
 		foreach ( WC_Edge_Subscription_Reconciler::secrets_by_mode() as $mode => $secret ) {
-			// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- This is Edge's documented signature format, not obfuscation.
-			if ( hash_equals( base64_encode( sha1( $secret, true ) ), $signature ) ) {
+			if ( WC_Edge_Webhook_Signature::matches( $parsed, $body, $secret ) ) {
 				return $mode;
 			}
 		}

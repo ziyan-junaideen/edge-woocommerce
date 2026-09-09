@@ -33,7 +33,7 @@ class ApiClientTest extends TestCase {
 			self::SECRET,
 			array_merge(
 				array(
-					'user_agent' => 'EdgeWooCommerce/2.2.0',
+					'user_agent' => 'EdgeWooCommerce/2.3.0',
 					'verify_tls' => true,
 				),
 				$args
@@ -65,7 +65,7 @@ class ApiClientTest extends TestCase {
 		$this->assertSame( 'Bearer ' . self::SECRET, $request['args']['headers']['Authorization'] );
 		$this->assertSame( 'application/vnd.api+json', $request['args']['headers']['Accept'] );
 		$this->assertSame( 'application/vnd.api+json', $request['args']['headers']['Content-Type'] );
-		$this->assertSame( 'EdgeWooCommerce/2.2.0', $request['args']['user-agent'] );
+		$this->assertSame( 'EdgeWooCommerce/2.3.0', $request['args']['user-agent'] );
 		$this->assertSame( 'body', $request['args']['data_format'] );
 
 		$body = json_decode( $request['args']['body'], true );
