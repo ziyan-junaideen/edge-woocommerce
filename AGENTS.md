@@ -13,7 +13,8 @@ REST namespace (`edge/v1`), the `WC_Edge_*`/`WC_EDGE_*` prefixes and the
 `EdgeWooCommerce/` user agent are **unchanged and must stay that way** — they are
 persisted on orders, registered with Edge, or visible on the wire. Licensed
 GPL-3.0-or-later (`LICENSE`); the upstream MIT notice is retained in `NOTICE.md`
-and must not be removed.
+and, in the distributed copy, in readme.txt's `== Notices ==` section. It must
+not be removed from either.
 
 The v2 API migration is **finished** (merged as #8, 2026-08-15). This is a
 maintenance codebase, not a port in progress — do not write compatibility shims
@@ -117,12 +118,16 @@ resources/js/frontend/index.js       block checkout payment method (source)
 assets/js/frontend/blocks.js         built bundle — generated, never edit
 webpack.config.js                    externalises @woocommerce/* to wc.wcBlocksRegistry etc.
 bin/build-release.sh                 release ZIP: sources + built JS, no vendor/, no prefixing.
-                                     `PLUGIN_SLUG` here is the installed folder name
+                                     `PLUGIN_SLUG` here is the installed folder name. Creates an
+                                     empty `languages/` in the stage and does not copy NOTICE.md
 readme.txt                           WordPress.org listing: header block, description,
-                                     disclaimer, FAQ, changelog. `Stable tag` must track
-                                     the version
-NOTICE.md                            upstream MIT notice + trademark statement; ships in
-                                     the ZIP
+                                     disclaimer, FAQ, Notices, changelog. `Stable tag`
+                                     must track the version, and `== Notices ==` carries
+                                     the MIT notice for the ZIP — build-release.sh fails
+                                     if it goes missing
+NOTICE.md                            upstream MIT notice + trademark statement; repo only,
+                                     **does not ship** — plugin check rejects any markdown
+                                     in the plugin root other than readme/README/CHANGELOG
 bin/build_i18n.sh                    JSON translations; needs a global `wp` binary
 tests/bootstrap.php                  WordPress shims, including a fake wp_remote_request(); loads the
                                      pure classes directly, WC_Edge_Payment_Outcome among them
@@ -158,6 +163,13 @@ separate script — `npm run build:all` or `npm run i18n:build` — and both she
 out to a global `wp`, so they fail here. Use `npx wp-scripts build` unless you
 specifically need the `.pot`.
 
+There is no `Domain Path` header: `languages/` is never built on this machine,
+and a header pointing at a directory the ZIP does not contain is a plugin-check
+warning. `wp_set_script_translations()` in the blocks integration still points
+at `languages/`, which is why `bin/build-release.sh` creates the directory in
+the stage even when it is empty. Restore the header only alongside a build that
+actually produces `.pot`/`.json` files.
+
 Rebuilding the JS is enough to see frontend changes on the local site; the
 plugin is symlinked in, so there is no copy step.
 
@@ -190,6 +202,31 @@ find . -path ./vendor -prune -o -path ./node_modules -prune -o \
   `WC_Edge_Money`, `WC_Edge_Mode`, `WC_Edge_Fingerprint` and
   `WC_Edge_Payment_Outcome` are shaped as they are.
 
+### Plugin check
+
+The WordPress.org Plugin Check plugin is installed on the Studio site. Run it
+against the **release build**, not the symlinked repo — the repo root carries
+`tests/`, `bin/`, `.github/`, the agent briefs and other markdown, all of which
+the checker reports and none of which ships:
+
+```bash
+bin/build-release.sh /tmp/edge-release
+cd /Users/jdeen/Studio/my-wordpress-website
+studio wp plugin check /tmp/edge-release/deens-edge-payments-for-woocommerce \
+  --slug=deens-edge-payments-for-woocommerce --format=csv
+```
+
+`--slug` is only belt and braces now that the symlink is named correctly, but
+pass it when checking a directory outside `wp-content/plugins`.
+
+As of 2026-09-12 that run is clean but for one warning:
+`NonPrefixedHooknameFound` on `woocommerce_edge_gateway_icon`. It stays —
+the filter is public API and renaming it would break anyone using it.
+
+Do not leave `dist/` in the tree when checking the installed plugin: it sits
+inside the symlinked root, so the checker walks into the staged copy and
+reports everything twice.
+
 ### CI
 
 `.github/workflows/php-composer.yml` runs the PHP job on a **7.4 and 8.3**
@@ -210,8 +247,14 @@ Two guardrails will fail the build, and both encode decisions worth keeping:
 ## Local test site
 
 A WordPress Studio site at `/Users/jdeen/Studio/my-wordpress-website`, with this
-repo symlinked in as `wp-content/plugins/edge-woocommerce`. WP 7.1, WooCommerce
-11.0.0, PHP 8.3, SQLite.
+repo symlinked in as `wp-content/plugins/deens-edge-payments-for-woocommerce`.
+WP 7.1, WooCommerce 11.0.0, PHP 8.3, SQLite. The symlink is named for the
+release slug deliberately — WordPress.org's plugin check derives the expected
+text domain from the containing folder (`Plugin_Context::__construct()`,
+`basename( dirname( $main_file ) )`), so a symlink named anything else reports
+every `__()` call in the plugin as a text-domain mismatch. Renaming it changes
+`plugin_basename`, so the plugin needs re-activating afterwards; gateway
+settings are keyed separately and survive.
 
 - URL: http://localhost:8881/
 - Admin credentials: see `AGENTS.local.md`, or run `studio status`
@@ -355,10 +398,24 @@ custom tables, `wp_edge_checkout_attempts`, `wp_edge_webhook_events` and
 option, and all three are trimmed by the daily `wc_edge_daily_cleanup` cron.
 
 `WC_EDGE_TESTING` is the unit-test guard: a class that the suite loads directly
-opens with `if ( ! defined( 'ABSPATH' ) && ! defined( 'WC_EDGE_TESTING' ) )`,
+nests it inside the ordinary guard,
+
+```php
+if ( ! defined( 'ABSPATH' ) ) {
+	if ( ! defined( 'WC_EDGE_TESTING' ) ) {
+		exit;
+	}
+}
+```
+
 while a class that genuinely needs WordPress guards on `ABSPATH` alone. Which
 guard a file uses is a statement about whether it is unit-testable — keep them
-honest.
+honest. The nesting is not stylistic: WordPress.org's plugin check (and the
+`Direct_File_Access_Check` its review scanner mirrors) recognises only a bare
+`! defined( 'ABSPATH' )` condition, so the flat
+`if ( ! defined( 'ABSPATH' ) && ! defined( 'WC_EDGE_TESTING' ) )` this used to
+be read as *no* direct-access protection in all twelve files (verified
+2026-09-12). Do not flatten it back.
 
 ### JSON:API
 

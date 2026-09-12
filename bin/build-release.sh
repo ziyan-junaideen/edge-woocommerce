@@ -29,10 +29,22 @@ echo "==> Copying plugin sources"
 cp "$ROOT/edge-gateway.php" "$STAGE/edge-gateway.php"
 cp -R "$ROOT/includes" "$STAGE/includes"
 cp -R "$ROOT/assets" "$STAGE/assets"
-for f in readme.txt README.md LICENSE NOTICE.md; do
+# NOTICE.md deliberately does not ship: WordPress.org's plugin check flags any
+# markdown file in the plugin root that is not readme/README/CHANGELOG. The MIT
+# notice and the trademark statement it carries live in readme.txt's "Notices"
+# section instead, which is what satisfies the MIT attribution requirement for
+# the distributed copy.
+for f in readme.txt README.md LICENSE; do
   [[ -f "$ROOT/$f" ]] && cp "$ROOT/$f" "$STAGE/$f"
 done
-[[ -d "$ROOT/languages" ]] && cp -R "$ROOT/languages" "$STAGE/languages"
+
+# `languages/` must exist in the build even when empty: the plugin header's
+# Domain Path is gone, but `wp_set_script_translations()` still points at this
+# directory, and a missing one is a plugin-check warning.
+mkdir -p "$STAGE/languages"
+if [[ -d "$ROOT/languages" ]]; then
+  cp -R "$ROOT/languages/." "$STAGE/languages/"
+fi
 
 echo "==> Verifying"
 fail=0
@@ -56,7 +68,13 @@ if grep -rq "vendor/autoload.php" "$STAGE/edge-gateway.php" "$STAGE/includes" 2>
   fail=1
 fi
 
-for required in "edge-gateway.php" "includes" "assets/js/frontend/blocks.js"; do
+# The MIT notice ships inside readme.txt now that NOTICE.md does not.
+if ! grep -q "Edge Payment Technologies, inc" "$STAGE/readme.txt" 2>/dev/null; then
+  echo "  FAIL: readme.txt is missing the upstream MIT notice" >&2
+  fail=1
+fi
+
+for required in "edge-gateway.php" "includes" "assets/js/frontend/blocks.js" "languages"; do
   if [[ ! -e "$STAGE/$required" ]]; then
     echo "  FAIL: missing $required" >&2
     fail=1

@@ -7,8 +7,10 @@
  */
 
 // Exit if accessed directly.
-if ( ! defined( 'ABSPATH' ) && ! defined( 'WC_EDGE_TESTING' ) ) {
-	exit;
+if ( ! defined( 'ABSPATH' ) ) {
+	if ( ! defined( 'WC_EDGE_TESTING' ) ) {
+		exit;
+	}
 }
 
 /**
