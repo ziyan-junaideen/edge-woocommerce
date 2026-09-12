@@ -188,8 +188,9 @@ final class WC_Edge_Webhook_Controller {
 	 * @param array  $event Normalised event.
 	 * @param string $mode  Trusted mode.
 	 * @return string Outcome label.
-	 * @throws RuntimeException When the gateway is unavailable, so the caller
-	 *                          releases the dedup claim and Edge can retry.
+	 * @throws RuntimeException When the gateway is unavailable, or when another
+	 *                          request is already applying this demand, so the
+	 *                          caller releases the dedup claim and Edge can retry.
 	 */
 	private static function apply( array $event, $mode ) {
 		if ( '' === $event['resource_id'] ) {
@@ -220,20 +221,57 @@ final class WC_Edge_Webhook_Controller {
 			throw new RuntimeException( 'Edge gateway unavailable while handling a webhook.' );
 		}
 
-		$api = WC_Edge_Client_Factory::client( $gateway->get_secret_key() );
+		// The read, the decision and the write are all in the sync, which the
+		// checkout poll shares: the shopper's browser asks at about the moment
+		// this delivery arrives, and only one of the two may move the order.
+		$result = WC_Edge_Order_Sync::sync( $order, $gateway );
 
-		// The payload carries a state, but the signature does not authenticate
-		// the body, so it is only a hint that something changed. This is the
-		// authoritative read.
-		$demand = $api->get( 'payment_demands/' . rawurlencode( $event['resource_id'] ) );
+		if ( is_wp_error( $result ) ) {
+			if ( 'edge_sync_locked' === $result->get_error_code() ) {
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Diagnostic text for the log; the caller turns this into a bare 500.
+				throw new RuntimeException( 'Demand ' . $event['resource_id'] . ' is already being applied.' );
+			}
 
-		$state = isset( $demand->data->attributes->processor_state )
-			? (string) $demand->data->attributes->processor_state
-			: '';
+			// The order lost its binding, or was rebound to a newer demand after a
+			// decline. Either way this delivery is not news about it.
+			return 'unknown-order';
+		}
 
-		self::record_risk_signals( $order, $demand );
+		return self::outcome_label( $result['outcome'], $result['state'] );
+	}
 
-		return self::transition( $order, $state, $event['resource_id'] );
+	/**
+	 * The label Edge is told about in the 200 body.
+	 *
+	 * Kept distinct from the outcome constants so the wire vocabulary this
+	 * endpoint has always answered with does not shift underneath Edge's delivery
+	 * log just because the decision moved into its own class.
+	 *
+	 * @param string $outcome One of the WC_Edge_Payment_Outcome constants.
+	 * @param string $state   Edge processor state.
+	 * @return string Outcome label.
+	 */
+	private static function outcome_label( $outcome, $state ) {
+		switch ( $outcome ) {
+			case WC_Edge_Payment_Outcome::COMPLETE:
+				return 'completed';
+
+			case WC_Edge_Payment_Outcome::FAIL:
+			case WC_Edge_Payment_Outcome::ALREADY_FAILED:
+				return 'failed';
+
+			case WC_Edge_Payment_Outcome::RECONCILE:
+				// Named as delivered: reversed, refunded or disputed.
+				return $state;
+
+			case WC_Edge_Payment_Outcome::UNRECOGNISED:
+				return 'unrecognised-state';
+
+			default:
+				// ALREADY_PAID, IGNORED_STALE_FAILURE and NO_CHANGE already read as
+				// labels.
+				return $outcome;
+		}
 	}
 
 	/**
@@ -491,123 +529,6 @@ final class WC_Edge_Webhook_Controller {
 		}
 
 		return null;
-	}
-
-	/**
-	 * Apply a state to an order, never downgrading it.
-	 *
-	 * Deliveries can arrive out of order and more than once, so every transition
-	 * has to be safe to repeat and safe to receive late. A paid order is never
-	 * moved backwards by an older failure.
-	 *
-	 * @param WC_Order $order     Order.
-	 * @param string   $state     Authoritative processor state.
-	 * @param string   $demand_id Demand id.
-	 * @return string Outcome label.
-	 */
-	private static function transition( WC_Order $order, $state, $demand_id ) {
-		$already_paid = $order->is_paid();
-
-		switch ( $state ) {
-			case 'succeeded':
-				if ( $already_paid ) {
-					return 'already-paid';
-				}
-
-				$order->payment_complete( $demand_id );
-				$order->add_order_note( __( 'Edge confirmed this payment succeeded.', 'edge-gateway' ) );
-
-				return 'completed';
-
-			case 'failed':
-				if ( $already_paid ) {
-					// Arriving after a success means it is stale. Record it, but
-					// do not un-pay an order.
-					$order->add_order_note(
-						__( 'Edge reported a failure for a payment already marked paid. Not changing the order.', 'edge-gateway' )
-					);
-
-					return 'ignored-stale-failure';
-				}
-
-				$order->update_status( 'failed', __( 'Edge declined this payment.', 'edge-gateway' ) );
-
-				return 'failed';
-
-			case 'reversed':
-			case 'refunded':
-			case 'disputed':
-				$order->update_meta_data( '_edge_processor_state', $state );
-				$order->add_order_note(
-					sprintf(
-						/* translators: %s: Edge processor state. */
-						__( 'Edge reported this payment as %s. Reconcile it in the Edge dashboard.', 'edge-gateway' ),
-						$state
-					)
-				);
-				$order->save();
-
-				return $state;
-
-			case 'pending':
-			case 'processing':
-			case 'incomplete':
-			case 'ready':
-			case 'confirmed':
-			case 'canceled':
-				return 'no-change';
-
-			default:
-				$order->add_order_note(
-					sprintf(
-						/* translators: %s: unrecognised state. */
-						__( 'Edge reported an unrecognised payment state: %s.', 'edge-gateway' ),
-						$state
-					)
-				);
-
-				return 'unrecognised-state';
-		}
-	}
-
-	/**
-	 * Keep the fraud and authentication results with the order.
-	 *
-	 * These are the evidence a merchant needs if a payment is ever disputed, and
-	 * they are not retrievable once the order is closed out.
-	 *
-	 * @param WC_Order $order  Order.
-	 * @param object   $demand Demand document.
-	 * @return void
-	 */
-	private static function record_risk_signals( WC_Order $order, $demand ) {
-		$attributes = isset( $demand->data->attributes ) ? $demand->data->attributes : null;
-
-		if ( ! $attributes ) {
-			return;
-		}
-
-		$signals = array(
-			'cvc2_check',
-			'address_line1_verification',
-			'postal_code_verification',
-			'threeds_status',
-			'threeds_version',
-			'eci',
-		);
-
-		$changed = false;
-
-		foreach ( $signals as $signal ) {
-			if ( isset( $attributes->$signal ) && '' !== (string) $attributes->$signal ) {
-				$order->update_meta_data( '_edge_' . $signal, (string) $attributes->$signal );
-				$changed = true;
-			}
-		}
-
-		if ( $changed ) {
-			$order->save();
-		}
 	}
 
 	/**

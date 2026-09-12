@@ -216,6 +216,113 @@ final class WC_Edge_Attempt_Store {
 	}
 
 	/**
+	 * Find an adopted attempt binding an order to a checkout session.
+	 *
+	 * This is the only link between a shopper's session and an order that does
+	 * not require handing the browser an order key or an email address, so it is
+	 * what the checkout status endpoint authorises on.
+	 *
+	 * An order can carry more than one adopted attempt - a shopper who is
+	 * declined and changes their address gets a second demand, and adoption binds
+	 * that one too - and any of them proves the session owns the order, which is
+	 * all this answers.
+	 *
+	 * @param int    $order_id    Order ID.
+	 * @param string $session_key Session identifier.
+	 * @return object|null
+	 */
+	public static function find_adopted( $order_id, $session_key ) {
+		global $wpdb;
+
+		$table = self::table_name();
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT * FROM {$table}
+				 WHERE order_id = %d AND session_key = %s AND status = %s
+				 ORDER BY updated_at DESC LIMIT 1",
+				(int) $order_id,
+				(string) $session_key,
+				self::STATUS_ADOPTED
+			)
+		);
+		// phpcs:enable
+	}
+
+	/**
+	 * Every recently adopted attempt for a session, newest first.
+	 *
+	 * Answers "has this shopper already placed an order that is still being
+	 * paid for", which is what the checkout-intent route needs before it spends
+	 * resources at Edge on a second one.
+	 *
+	 * More than one row can come back: a shopper declined once and retrying gets
+	 * a second demand, and adoption binds that one to the same order.
+	 *
+	 * @param string $session_key Session identifier.
+	 * @param string $since       Cut-off as a UTC MySQL datetime.
+	 * @return array<int,object>
+	 */
+	public static function find_recent_adopted( $session_key, $since ) {
+		global $wpdb;
+
+		$table = self::table_name();
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table}
+				 WHERE session_key = %s AND status = %s AND order_id IS NOT NULL AND updated_at >= %s
+				 ORDER BY updated_at DESC",
+				(string) $session_key,
+				self::STATUS_ADOPTED,
+				(string) $since
+			)
+		);
+		// phpcs:enable
+
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * Move a session's attempts to a new session key.
+	 *
+	 * A guest who creates an account during checkout has their WooCommerce
+	 * session migrated from the generated guest id to their user id, and that
+	 * happens before the order is processed. Everything here is keyed on the
+	 * session, so without this the row claimed under the guest key is invisible
+	 * to adoption and the order ends up with no binding at all - and the status
+	 * route, which authorises on the same row, could not find the order either.
+	 *
+	 * @param string $from Session key the attempts were claimed under.
+	 * @param string $to   Session key they belong to now.
+	 * @return int Rows moved.
+	 */
+	public static function rekey_session( $from, $to ) {
+		global $wpdb;
+
+		$from = (string) $from;
+		$to   = (string) $to;
+
+		if ( '' === $from || '' === $to || $from === $to ) {
+			return 0;
+		}
+
+		$table = self::table_name();
+
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return (int) $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$table} SET session_key = %s WHERE session_key = %s",
+				$to,
+				$from
+			)
+		);
+		// phpcs:enable
+	}
+
+	/**
 	 * Fetch an attempt by key.
 	 *
 	 * @param string $attempt_key Attempt key.

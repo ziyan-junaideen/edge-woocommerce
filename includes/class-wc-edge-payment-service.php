@@ -20,6 +20,44 @@ if ( ! defined( 'ABSPATH' ) ) {
 final class WC_Edge_Payment_Service {
 
 	/**
+	 * Processor states in which Edge has already taken the money.
+	 *
+	 * Confirming again is neither possible nor wanted: the API answers 405, and
+	 * the order is one the poll or the webhook is about to complete.
+	 *
+	 * @var string[]
+	 */
+	const SETTLED_STATES = array( 'succeeded', 'reversed', 'disputed', 'refunded' );
+
+	/**
+	 * Processor states a confirm can still be applied to.
+	 *
+	 * `incomplete` and `ready` are the run-up to a first confirm. `failed` is
+	 * there because a declined demand is the one non-terminal outcome Edge allows
+	 * back in: confirming it again moves it to `pending`, which is what lets a
+	 * shopper retry with the same order rather than starting over.
+	 *
+	 * @var string[]
+	 */
+	const RETRY_STATES = array( 'incomplete', 'ready', 'failed' );
+
+	/**
+	 * How far back an on-hold Edge order still counts as this session's problem.
+	 *
+	 * An Edge payment settles in seconds, so an hour is generous by any ordinary
+	 * measure and the cut-off only bites when something upstream has gone wrong.
+	 * Past it the order is treated as abandoned and the shopper may start again:
+	 * a stuck job at Edge is not a reason to refuse somebody the ability to buy,
+	 * and an order left on-hold is one a merchant can see and act on, where a
+	 * shopper who cannot check out is one who leaves. The trade-off is that the
+	 * stuck payment could in principle still settle and leave two orders to
+	 * reconcile, which is the lesser of the two.
+	 *
+	 * @var int
+	 */
+	const IN_FLIGHT_WINDOW = 3600;
+
+	/**
 	 * Prepare a demand for the current cart.
 	 *
 	 * @param WC_Gateway_Edge $gateway Configured gateway.
@@ -108,12 +146,93 @@ final class WC_Edge_Payment_Service {
 	}
 
 	/**
+	 * The order this session is already paying for, if there is one.
+	 *
+	 * Preparing a second demand while the first order is settling gives a shopper
+	 * two orders for the same goods - the reload case, where the checkout comes
+	 * back with a full cart while the order placed from it is still in flight.
+	 *
+	 * Each candidate is synced before it is judged, so an order that settled
+	 * while nothing was watching is resolved here rather than blocking the
+	 * checkout until a poll happens to arrive.
+	 *
+	 * @param WC_Gateway_Edge $gateway     Configured gateway.
+	 * @param string          $session_key Session identifier.
+	 * @return WC_Order|null The order still being paid for, or null.
+	 */
+	public static function in_flight_order( WC_Gateway_Edge $gateway, $session_key ) {
+		$since = gmdate( 'Y-m-d H:i:s', time() - self::IN_FLIGHT_WINDOW );
+
+		foreach ( WC_Edge_Attempt_Store::find_recent_adopted( (string) $session_key, $since ) as $row ) {
+			$order = wc_get_order( (int) $row->order_id );
+
+			if ( ! $order instanceof WC_Order
+				|| 'edge' !== $order->get_payment_method()
+				|| 'on-hold' !== $order->get_status() ) {
+				continue;
+			}
+
+			// The order may have been rebound to a newer demand after a decline,
+			// in which case this row is history and says nothing about it.
+			if ( ! hash_equals( (string) $order->get_meta( '_edge_demand_id' ), (string) $row->demand_id ) ) {
+				continue;
+			}
+
+			if ( self::still_settling( $order, $gateway ) ) {
+				return $order;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Whether an on-hold order is still waiting on Edge.
+	 *
+	 * Anything that stops the sync from producing an answer counts as still in
+	 * flight. Not knowing is not the same as knowing it is over, and the safe
+	 * direction is to make the shopper wait rather than to let them buy twice.
+	 *
+	 * @param WC_Order        $order   Candidate order.
+	 * @param WC_Gateway_Edge $gateway Configured gateway.
+	 * @return bool
+	 */
+	private static function still_settling( WC_Order $order, WC_Gateway_Edge $gateway ) {
+		try {
+			$result = WC_Edge_Order_Sync::sync( $order, $gateway );
+		} catch ( \Throwable $e ) {
+			WC_Edge_Logger::info(
+				'Could not read the payment state for order ' . $order->get_id() . ' while checking for one in flight.'
+			);
+
+			return true;
+		}
+
+		if ( is_wp_error( $result ) ) {
+			return true;
+		}
+
+		return WC_Edge_Payment_Outcome::CHECKOUT_PROCESSING
+			=== WC_Edge_Payment_Outcome::checkout_status( $result['state'] );
+	}
+
+	/**
 	 * Revalidate the bound demand and confirm it.
+	 *
+	 * The same order can reach here twice. A shopper declined by their bank stays
+	 * on the checkout, and the block reuses the order for the next Place Order,
+	 * so what the demand is already doing decides whether confirming is the right
+	 * move at all: money that has moved is never asked for again, a payment still
+	 * in flight is reported as-is rather than raced, and only a demand that is
+	 * idle or declined is confirmed. Every one of those is a success as far as the
+	 * caller is concerned, because in each case the order has a payment to wait
+	 * on - what differs is only whether this call is what started it.
 	 *
 	 * @param WC_Gateway_Edge $gateway   Gateway.
 	 * @param WC_Order        $order     Order being paid.
 	 * @param string          $submitted Demand id the browser sent, for cross-checking only.
-	 * @return string|WP_Error The confirmed demand id.
+	 * @return array|WP_Error `array{demand_id:string, prior_state:string}` - the state
+	 *                        being the one the demand was in before this call touched it.
 	 */
 	public static function confirm( WC_Gateway_Edge $gateway, WC_Order $order, $submitted ) {
 		$bound = (string) $order->get_meta( '_edge_demand_id' );
@@ -154,7 +273,59 @@ final class WC_Edge_Payment_Service {
 			return $mismatch;
 		}
 
-		return self::do_confirm( $api, $bound );
+		$state = isset( $demand->data->attributes->processor_state )
+			? (string) $demand->data->attributes->processor_state
+			: '';
+
+		// Taken alongside the state because the pair is what makes an ambiguous
+		// confirm resolvable: a demand can come back in the state it started in
+		// having been all the way round the cycle, and only the timestamp says so.
+		$updated_at = isset( $demand->data->attributes->updated_at )
+			? (string) $demand->data->attributes->updated_at
+			: '';
+
+		if ( in_array( $state, self::SETTLED_STATES, true ) ) {
+			// Edge took the money for this order while the shopper was retrying -
+			// a success that landed after they had given up on it. Confirming
+			// again would be refused anyway; report it as paid and let the poll or
+			// the webhook complete the order.
+			WC_Edge_Logger::info( 'Demand ' . $bound . ' is already ' . $state . '; not confirming it again.' );
+
+			return array(
+				'demand_id'   => $bound,
+				'prior_state' => $state,
+			);
+		}
+
+		if ( in_array( $state, array( 'pending', 'processing' ), true ) ) {
+			// An attempt is already in flight for this order. Confirming again
+			// would race money that may be about to move, but refusing would be
+			// wrong too: this is a duplicate submit for the payment the shopper is
+			// already waiting on, and the honest answer to that is the one they
+			// would have got the first time. The order stays on-hold and the
+			// browser's observer waits for the same outcome.
+			WC_Edge_Logger::info( 'Demand ' . $bound . ' is already ' . $state . '; waiting on it rather than confirming again.' );
+
+			return array(
+				'demand_id'   => $bound,
+				'prior_state' => $state,
+			);
+		}
+
+		if ( 'failed' === $state ) {
+			WC_Edge_Logger::info( 'Retrying confirm for ' . $bound . ' after a decline' );
+		}
+
+		$confirmed = self::do_confirm( $api, $bound, $state, $updated_at );
+
+		if ( is_wp_error( $confirmed ) ) {
+			return $confirmed;
+		}
+
+		return array(
+			'demand_id'   => $confirmed,
+			'prior_state' => $state,
+		);
 	}
 
 	/**
@@ -283,11 +454,13 @@ final class WC_Edge_Payment_Service {
 	 * the authoritative state is read back before deciding anything. Retrying a
 	 * confirm that already succeeded would be a second charge.
 	 *
-	 * @param WC_Edge_API_Client $api       Configured client.
-	 * @param string             $demand_id Demand id.
+	 * @param WC_Edge_API_Client $api              Configured client.
+	 * @param string             $demand_id        Demand id.
+	 * @param string             $prior_state      State the demand was in before the PATCH.
+	 * @param string             $prior_updated_at `updated_at` as it read before the PATCH.
 	 * @return string|WP_Error
 	 */
-	private static function do_confirm( WC_Edge_API_Client $api, $demand_id ) {
+	private static function do_confirm( WC_Edge_API_Client $api, $demand_id, $prior_state, $prior_updated_at ) {
 		try {
 			$api->confirm( 'payment_demands', $demand_id );
 
@@ -304,25 +477,39 @@ final class WC_Edge_Payment_Service {
 			// 0 is a transport failure; 405 means the state moved under us; 5xx
 			// may have applied. All three are ambiguous until we look.
 			if ( 0 === $status || 405 === $status || $status >= 500 ) {
-				return self::resolve_ambiguous_confirm( $api, $demand_id );
+				return self::resolve_ambiguous_confirm( $api, $demand_id, $prior_state, $prior_updated_at );
 			}
 
 			WC_Edge_Logger::error( 'Confirm failed for ' . $demand_id . ' (HTTP ' . $status . ')' );
 
 			return new WP_Error( 'edge_confirm_failed', self::generic_failure() );
 		} catch ( \Throwable $e ) {
-			return self::resolve_ambiguous_confirm( $api, $demand_id );
+			return self::resolve_ambiguous_confirm( $api, $demand_id, $prior_state, $prior_updated_at );
 		}
 	}
 
 	/**
 	 * Read the demand back and decide whether the confirm took effect.
 	 *
-	 * @param WC_Edge_API_Client $api       Configured client.
-	 * @param string             $demand_id Demand id.
+	 * What the state means depends on where it started, and the state alone does
+	 * not say. A retry of a declined payment runs `failed -> pending ->
+	 * processing -> failed`, and in the sandbox that whole cycle can finish
+	 * inside the window this is resolving, so reading `failed` again is no proof
+	 * the PATCH never landed. Re-sending it on that reading would be a second
+	 * authorisation the shopper never asked for.
+	 *
+	 * `updated_at` is what settles it. Unchanged, alongside an unchanged state,
+	 * means the demand has not been touched since the read before the PATCH and a
+	 * single retry is safe. Changed means the PATCH landed and the state on the
+	 * other side of it is the answer.
+	 *
+	 * @param WC_Edge_API_Client $api              Configured client.
+	 * @param string             $demand_id        Demand id.
+	 * @param string             $prior_state      State the demand was in before the PATCH.
+	 * @param string             $prior_updated_at `updated_at` as it read before the PATCH.
 	 * @return string|WP_Error
 	 */
-	private static function resolve_ambiguous_confirm( WC_Edge_API_Client $api, $demand_id ) {
+	private static function resolve_ambiguous_confirm( WC_Edge_API_Client $api, $demand_id, $prior_state, $prior_updated_at ) {
 		$demand = self::fetch_demand( $api, $demand_id );
 
 		if ( is_wp_error( $demand ) ) {
@@ -333,6 +520,10 @@ final class WC_Edge_Payment_Service {
 			? (string) $demand->data->attributes->processor_state
 			: '';
 
+		$updated_at = isset( $demand->data->attributes->updated_at )
+			? (string) $demand->data->attributes->updated_at
+			: '';
+
 		WC_Edge_Logger::info( 'Resolving ambiguous confirm for ' . $demand_id . '; state is ' . $state );
 
 		// Already moving through the processor: the confirm landed.
@@ -340,8 +531,17 @@ final class WC_Edge_Payment_Service {
 			return $demand_id;
 		}
 
-		// Still an unconfirmed intent, so nothing was applied. One retry only.
-		if ( in_array( $state, array( 'incomplete', 'ready' ), true ) ) {
+		// Untouched since the read before the PATCH, and still confirmable, so
+		// nothing was applied. One retry only.
+		//
+		// An empty prior state means the attribute was missing rather than that
+		// the demand was idle, and an empty timestamp is not evidence of anything,
+		// so neither is allowed to authorise a second PATCH.
+		if ( '' !== $prior_state
+			&& '' !== $prior_updated_at
+			&& $state === $prior_state
+			&& $updated_at === $prior_updated_at
+			&& in_array( $state, self::RETRY_STATES, true ) ) {
 			try {
 				$api->confirm( 'payment_demands', $demand_id );
 
@@ -353,6 +553,9 @@ final class WC_Edge_Payment_Service {
 			}
 		}
 
+		// The demand moved, so the confirm did land, and `failed` on the far side
+		// of it is the bank's answer. An untouched `failed` demand never reaches
+		// here - the retry above takes it.
 		if ( 'failed' === $state ) {
 			return new WP_Error(
 				'edge_payment_failed',

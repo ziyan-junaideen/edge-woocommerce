@@ -3,7 +3,7 @@
  * Plugin Name: Edge Payments Gateway
  * Plugin URI: https://github.com/Edge-Payment-Technologies/edge-woocommerce
  * Description: Adds the Edge Payments gateway to your WooCommerce website.
- * Version: 2.3.0
+ * Version: 2.4.0
  *
  * Author: Edge Payments
  * Author URI: https://tryedge.io
@@ -28,7 +28,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'WC_EDGE_VERSION', '2.3.0' );
+define( 'WC_EDGE_VERSION', '2.4.0' );
 define( 'WC_EDGE_PLUGIN_FILE', __FILE__ );
 
 /**
@@ -98,9 +98,13 @@ class WC_Edge_Payments {
 	 */
 	public static function activate() {
 		require_once self::plugin_abspath() . 'includes/class-wc-edge-attempt-store.php';
+		require_once self::plugin_abspath() . 'includes/class-wc-edge-demand-lock.php';
 
 		WC_Edge_Attempt_Store::install();
 		update_option( WC_Edge_Attempt_Store::SCHEMA_OPTION, WC_Edge_Attempt_Store::SCHEMA_VERSION );
+
+		WC_Edge_Demand_Lock::install();
+		update_option( WC_Edge_Demand_Lock::SCHEMA_OPTION, WC_Edge_Demand_Lock::SCHEMA_VERSION );
 	}
 
 	/**
@@ -130,10 +134,13 @@ class WC_Edge_Payments {
 		require_once $path . 'class-wc-edge-api-client.php';
 		require_once $path . 'class-wc-edge-client-factory.php';
 		require_once $path . 'class-wc-edge-attempt-store.php';
+		require_once $path . 'class-wc-edge-demand-lock.php';
 		require_once $path . 'class-wc-edge-fingerprint.php';
 		require_once $path . 'class-wc-edge-order-mapper.php';
 		require_once $path . 'class-wc-edge-logger.php';
 		require_once $path . 'class-wc-edge-cart-items.php';
+		require_once $path . 'class-wc-edge-payment-outcome.php';
+		require_once $path . 'class-wc-edge-order-sync.php';
 		require_once $path . 'class-wc-edge-payment-service.php';
 		require_once $path . 'class-wc-edge-refund-outcome.php';
 		require_once $path . 'class-wc-edge-refund-service.php';
@@ -146,7 +153,7 @@ class WC_Edge_Payments {
 		add_action( 'rest_api_init', array( 'WC_Edge_REST_Controller', 'register' ) );
 		add_action( 'rest_api_init', array( 'WC_Edge_Webhook_Controller', 'register' ) );
 
-		// Housekeeping for both bounded tables.
+		// Housekeeping for the three bounded tables.
 		add_action( 'wc_edge_daily_cleanup', array( __CLASS__, 'run_cleanup' ) );
 
 		if ( ! wp_next_scheduled( 'wc_edge_daily_cleanup' ) ) {
@@ -155,6 +162,16 @@ class WC_Edge_Payments {
 
 		// Bind the pre-order attempt to the order the moment one exists.
 		add_action( 'woocommerce_store_api_checkout_order_processed', array( __CLASS__, 'adopt_attempt' ), 10, 1 );
+
+		// Follow the session when a guest signs in or creates an account, so the
+		// attempt claimed under the guest key is still findable. See
+		// rekey_attempts().
+		add_action( 'woocommerce_guest_session_to_user_id', array( __CLASS__, 'rekey_attempts' ), 10, 2 );
+
+		// The shopper watches the whole on-hold -> settled cycle on the checkout,
+		// so these two would only ever be noise. See suppress_customer_email().
+		add_filter( 'woocommerce_email_enabled_customer_on_hold_order', array( __CLASS__, 'suppress_customer_email' ), 10, 3 );
+		add_filter( 'woocommerce_email_enabled_customer_failed_order', array( __CLASS__, 'suppress_customer_email' ), 10, 3 );
 
 		// Hold on to the refund row WooCommerce is building, so process_refund()
 		// can identify it. See claim_refund().
@@ -167,6 +184,7 @@ class WC_Edge_Payments {
 		// single option read when the version already matches.
 		WC_Edge_Attempt_Store::maybe_install();
 		WC_Edge_Webhook_Store::maybe_install();
+		WC_Edge_Demand_Lock::maybe_install();
 
 		// Make the WC_Gateway_Edge class available.
 		if ( class_exists( 'WC_Payment_Gateway' ) ) {
@@ -229,13 +247,14 @@ class WC_Edge_Payments {
 	}
 
 	/**
-	 * Trim both bounded tables.
+	 * Trim the bounded tables.
 	 *
 	 * @return void
 	 */
 	public static function run_cleanup() {
 		WC_Edge_Attempt_Store::purge();
 		WC_Edge_Webhook_Store::purge();
+		WC_Edge_Demand_Lock::purge();
 	}
 
 	/**
@@ -288,6 +307,50 @@ class WC_Edge_Payments {
 		$order->save();
 
 		WC_Edge_Attempt_Store::adopt( $attempt->attempt_key, $order->get_id() );
+	}
+
+	/**
+	 * Carry this session's checkout attempts over to the shopper's user id.
+	 *
+	 * WooCommerce migrates a guest session to the user id as soon as the shopper
+	 * signs in or creates an account, and on the block checkout that happens
+	 * before `woocommerce_store_api_checkout_order_processed` fires. Everything
+	 * an attempt is found by is the session key, so without this adopt_attempt()
+	 * looks under the new key, finds nothing, and the order is confirmed with no
+	 * binding at all. The status route authorises on the same row and would miss
+	 * it too.
+	 *
+	 * @param string $guest_session_id Session key the attempts were claimed under.
+	 * @param string $user_id          Session key WooCommerce moved to.
+	 * @return void
+	 */
+	public static function rekey_attempts( $guest_session_id, $user_id ) {
+		WC_Edge_Attempt_Store::rekey_session( (string) $guest_session_id, (string) $user_id );
+	}
+
+	/**
+	 * Keep the on-hold and payment-failed emails away from Edge shoppers.
+	 *
+	 * An Edge order is on-hold for the seconds between confirm and the outcome,
+	 * and the shopper is watching that happen on the checkout page. A decline and
+	 * a retry would send them two "your order is on hold" emails and a "payment
+	 * failed" one whose pay link points at `order-pay` - a surface this gateway
+	 * refuses, so following it leads nowhere.
+	 *
+	 * Only the customer-facing pair. The merchant still gets the admin failed
+	 * order email, which is the one somebody acts on.
+	 *
+	 * @param bool     $enabled Whether WooCommerce would send it.
+	 * @param mixed    $order   The object the email is about, which is not always an order.
+	 * @param WC_Email $email   The email being considered.
+	 * @return bool
+	 */
+	public static function suppress_customer_email( $enabled, $order, $email ) { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- Declared to match the filter, which passes three arguments; which email it is has already been decided by which of the two hooks called us.
+		if ( $order instanceof WC_Order && 'edge' === $order->get_payment_method() ) {
+			return false;
+		}
+
+		return $enabled;
 	}
 
 	/**

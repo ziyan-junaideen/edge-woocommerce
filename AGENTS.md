@@ -46,7 +46,9 @@ names. Treat it as a starting point, not as authority.
 ```
 edge-gateway.php                     bootstrap: includes, gateway + blocks registration,
                                      HPOS/blocks compatibility, settings upgrade, attempt
-                                     adoption, daily cleanup cron
+                                     adoption, session re-keying on guest -> user, customer
+                                     on-hold/failed email suppression, daily cleanup cron
+                                     across the three tables
 includes/
   class-wc-edge-api-client.php       Edge JSON:API client over wp_remote_request(); GET/POST/PATCH
                                      only (the API has no DELETE routes)
@@ -59,6 +61,9 @@ includes/
   class-wc-edge-client-factory.php   resolves API root, dashboard host, browser SDK URL, TLS policy
                                      and user agent; hands out clients for a secret key
   class-wc-edge-countries.php        ISO 3166-1 alpha-2 -> alpha-3 table
+  class-wc-edge-demand-lock.php      custom table wp_edge_demand_locks: an owner-token lease on one
+                                     demand. First insert wins; an expired lease can be taken over
+                                     in the same statement, so nothing wedges an order
   class-wc-edge-fingerprint.php      stable hash of everything a demand depends on; what the
                                      attempt/idempotency key is derived from
   class-wc-edge-logger.php           WooCommerce log channel "edge-payments", with redaction
@@ -67,18 +72,29 @@ includes/
   class-wc-edge-money.php            decimal strings -> integer cents without ever touching a float
   class-wc-edge-order-mapper.php     builds the JSON:API request documents; pure, so the exact bytes
                                      sent to Edge are unit-testable
-  class-wc-edge-payment-service.php  orchestration: prepare() and confirm()
+  class-wc-edge-order-sync.php       reads the demand back and applies what it says to the order,
+                                     under the demand lock; shared by the webhook and the poll.
+                                     reload_order() is the cache-evicting order read the gateway
+                                     uses too
+  class-wc-edge-payment-outcome.php  pure: what a processor state means for an order, what it means
+                                     to the waiting checkout, and the decline copy. The judgement
+                                     calls, so they are testable
+  class-wc-edge-payment-service.php  orchestration: prepare(), confirm() and in_flight_order()
   class-wc-edge-refund-outcome.php   pure: what a refund response meant, and which refund in a
                                      listing is ours. The judgement calls, so they are testable
   class-wc-edge-refund-service.php   orchestration: refund(), full and partial
-  class-wc-edge-rest-controller.php  POST /wp-json/edge/v1/checkout-intent
+  class-wc-edge-rest-controller.php  POST /wp-json/edge/v1/checkout-intent and .../checkout-status —
+                                     the demand the iframe mounts against, and the answer the
+                                     waiting checkout polls for
   class-wc-edge-subscription-reconciler.php
                                      reconciles this site's Edge *webhook* subscription (nothing to
                                      do with WooCommerce Subscriptions)
   class-wc-edge-webhook-signature.php
                                      pure: verifies the v3 `edge-signature` HMAC on a delivery
   class-wc-edge-webhook-controller.php
-                                     POST /wp-json/edge/v1/webhook — the authoritative outcome
+                                     POST /wp-json/edge/v1/webhook — verify, dedupe, then hand
+                                     payment events to WC_Edge_Order_Sync; refunds are still
+                                     applied here
   class-wc-edge-webhook-store.php    custom table wp_edge_webhook_events: dedupe + serialise delivery
   class-wc-gateway-edge.php          WC_Payment_Gateway subclass: settings, is_available(),
                                      process_payment()
@@ -90,8 +106,9 @@ assets/js/frontend/blocks.js         built bundle — generated, never edit
 webpack.config.js                    externalises @woocommerce/* to wc.wcBlocksRegistry etc.
 bin/build-release.sh                 release ZIP: sources + built JS, no vendor/, no prefixing
 bin/build_i18n.sh                    JSON translations; needs a global `wp` binary
-tests/bootstrap.php                  WordPress shims, including a fake wp_remote_request()
-tests/unit/                          the suite (303 tests as of 2026-09-09)
+tests/bootstrap.php                  WordPress shims, including a fake wp_remote_request(); loads the
+                                     pure classes directly, WC_Edge_Payment_Outcome among them
+tests/unit/                          the suite (373 tests as of 2026-09-11)
 ```
 
 `assets/`, `languages/`, `vendor/`, `node_modules/`, `dist/` and `composer.lock`
@@ -152,8 +169,8 @@ find . -path ./vendor -prune -o -path ./node_modules -prune -o \
   money conversion, fingerprinting/idempotency, and webhook handling. Prefer
   putting the logic worth being wrong about in a pure method so it can be tested
   without WordPress — that is why `WC_Edge_Cart_Items`, `WC_Edge_Order_Mapper`,
-  `WC_Edge_Money`, `WC_Edge_Mode` and `WC_Edge_Fingerprint` are shaped as they
-  are.
+  `WC_Edge_Money`, `WC_Edge_Mode`, `WC_Edge_Fingerprint` and
+  `WC_Edge_Payment_Outcome` are shaped as they are.
 
 ### CI
 
@@ -183,6 +200,13 @@ repo symlinked in as `wp-content/plugins/edge-woocommerce`. WP 7.1, WooCommerce
 - Auto-login: http://localhost:8881/studio-auto-login?redirect_to=%2Fwp-admin%2F
 - Gateway settings: WooCommerce → Settings → Payments → Edge Payments
 - Test product: "Edge Test Product", $25.00 (post id 12)
+- Webhooks **do** arrive here from the local backend: the reconciled
+  subscription's callback is `http://[::1]:8881/wp-json/edge/v1/webhook`, and
+  deliveries land in `wp_edge_webhook_events` within seconds of a demand
+  settling (verified 2026-09-12). So the webhook and the checkout poll race for
+  real on this site, which is the condition the shared sync has to hold under.
+- The hosted card iframe cannot be typed into from the browser extension; a
+  decline-then-retry run needs a person at the keyboard for the card fields.
 
 All WP-CLI goes through `studio wp`, and **it must run with the site directory as
 the working directory** — from anywhere else it fails with "The specified
@@ -306,6 +330,12 @@ origin and turn the gateway into an SSRF primitive.
 
 There is one filter, `woocommerce_edge_gateway_icon`.
 
+The plugin owns three REST routes, all under `edge/v1` —
+`POST /checkout-intent`, `POST /checkout-status` and `POST /webhook` — and three
+custom tables, `wp_edge_checkout_attempts`, `wp_edge_webhook_events` and
+`wp_edge_demand_locks`. Each table installs itself behind its own schema-version
+option, and all three are trimmed by the daily `wc_edge_daily_cleanup` cron.
+
 `WC_EDGE_TESTING` is the unit-test guard: a class that the suite loads directly
 opens with `if ( ! defined( 'ABSPATH' ) && ! defined( 'WC_EDGE_TESTING' ) )`,
 while a class that genuinely needs WordPress guards on `ABSPATH` alone. Which
@@ -333,7 +363,9 @@ verification having happened at all.
 
 1. The block checkout calls `POST /wp-json/edge/v1/checkout-intent`. It requires
    a valid `X-WP-Nonce`, a WooCommerce session and a non-empty cart, and refuses
-   if the browser's claimed `cart_hash` disagrees with the server's.
+   if the browser's claimed `cart_hash` disagrees with the server's. It also
+   refuses with **409 `edge_payment_in_flight`**, carrying `orderId` in the error
+   data, when this session already has an Edge payment settling — see below.
 2. `WC_Edge_Payment_Service::prepare()` fingerprints the payment facts
    (`WC_Edge_Fingerprint`), claims a row in `wp_edge_checkout_attempts`
    (`WC_Edge_Attempt_Store`), then creates the customer, consumer address and
@@ -355,10 +387,153 @@ verification having happened at all.
    demand, revalidates the binding and the amount, `PATCH`es
    `payment_demands/{id}/confirm`, sets the transaction id, and puts the order
    **on-hold**. Confirming means Edge accepted the payment for processing, not
-   that it succeeded, so the order is never completed here.
-8. `POST /wp-json/edge/v1/webhook` is the authoritative outcome. Deliveries are
-   signature-verified (`edge-signature`), deduplicated and serialised through
+   that it succeeded, so the order is never completed here. Confirm, the note,
+   the status write and the save are all held under the demand lock, taken with
+   three tries 300ms apart before the gateway gives up with a "still being
+   processed" failure, and for `WC_Gateway_Edge::CONFIRM_LOCK_TTL` (90s) rather
+   than the lock's 30s default — the critical section is up to four calls at
+   `WC_Edge_API_Client::TIMEOUT` (15s) each, and a lease that expires mid-confirm
+   is taken over by a poll or a webhook that then writes the order underneath it.
+   The re-read before the status write goes through
+   `WC_Edge_Order_Sync::reload_order()`, not a bare `wc_get_order()`, for the
+   reason given below. It returns `result => 'pending'`, which the Store API
+   answers as **HTTP 202** (`CheckoutTrait::prepare_item_for_response()`,
+   WooCommerce 11.0.0), plus `edge_demand_id` and `edge_order_id` — WooCommerce
+   merges the whole return array into the response's `payment_details`
+   (`src/StoreApi/Legacy.php`), casting the values to string, which is where the
+   block script reads them. The order id is in there because Blocks seeds the
+   checkout store's `orderId` from the draft order in the opening
+   `GET /wc/store/v1/checkout` and never refreshes it from the POST response, so
+   on a fresh session the `onCheckoutSuccess` observer is handed `0`; the script
+   prefers `payment_details.edge_order_id` and falls back to the observer's value
+   only when that is missing or not a positive integer. `redirect` stays in the
+   array as the fallback for a client that does not wait.
+
+   An ambiguous confirm that resolves to a decline — `confirm()` answering
+   `WP_Error` with code `edge_payment_failed` — moves the order to **`failed`**
+   before returning, inside the same locked section and with the same note the
+   sync uses. Nothing else would: `failed` applies only from `on-hold`, so the
+   webhook that follows is a no-change against the `pending` order Blocks left
+   behind. Every other error code is a notice and no status write.
+8. The browser then waits. The block's `onCheckoutSuccess` observer polls
+   `POST /wp-json/edge/v1/checkout-status` every 2s, easing to 4s after 20s, and
+   gives up after 120s. `succeeded` redirects; `failed` becomes a Blocks error
+   notice, the form unlocks, and the iframe **stays mounted on the same demand**
+   — so the next Place Order re-verifies against it and `confirm()` re-`PATCH`es
+   the failed demand. The same WooCommerce order is reused, because by then it is
+   `failed`: Blocks reuses a `pending` or `failed` draft whose cart hash still
+   matches and never an `on-hold` one (`DraftOrderTrait::is_valid_draft_order()`
+   — `needs_payment()`, which on-hold is not). A timeout sends the shopper to the
+   thank-you page with the order on-hold, which is what this gateway did before
+   2.4.0.
+9. `POST /wp-json/edge/v1/webhook` is the authoritative outcome and arrives
+   whether or not anybody is watching. Deliveries are signature-verified
+   (`edge-signature`), deduplicated and serialised through
    `wp_edge_webhook_events`, and only then move the order.
+
+The webhook and the poll do the same thing: both call
+`WC_Edge_Order_Sync::sync()`, which takes the demand lock, re-reads the order,
+re-reads the demand from the API — the API read is the authoritative one, never
+the delivered payload — and applies the result. Either path may be what
+completes an order. The transition rules are `WC_Edge_Payment_Outcome::decide()`:
+
+- `succeeded` completes the order from **any** unpaid status. Money that has been
+  taken is never stale.
+- `failed` applies **only from `on-hold`**. From `pending` it is stale — a retry
+  confirm is in progress and is about to write `on-hold` — and from `failed` the
+  order already records it. An already-paid order gets a note and is not un-paid.
+- `reversed`, `refunded` and `disputed` write `_edge_processor_state` and a note
+  telling the merchant to reconcile in the Edge dashboard.
+- `pending`, `processing`, `incomplete`, `ready`, `confirmed` and `canceled` are
+  no-change. Anything else gets a note saying so.
+
+Both in-lock re-reads — the sync's and `process_payment()`'s — go through
+`WC_Edge_Order_Sync::reload_order()`, because `wc_get_order()` on its own is not
+a fresh read. Under HPOS the container's
+`Automattic\WooCommerce\Caches\OrderCache` hands back the object this very
+request already built (the `order_objects` group is non-persistent, so it is a
+per-request store of exactly the copy the lock exists to get away from); the HPOS
+data store keeps a second cache of its own, `orders_data` plus the raw meta
+behind it, cleared by `OrdersTableDataStore::clear_cached_data()`; `WC_Data`
+caches an order's raw meta rows under the `orders` group on both storages; and
+post storage adds the post and post-meta caches. A webhook that completed the
+order milliseconds before the poll took the lock is invisible through any of
+them, `decide()` sees `on-hold`, and `payment_complete()` runs twice.
+`reload_order()` evicts all four — each guarded, so an older WooCommerce that has
+none of them still works — and only then calls `wc_get_order()`. Verified on the
+Studio site with HPOS on (2026-09-12): after a direct `UPDATE wp_wc_orders SET
+status` behind a primed read, `wc_get_order()` still reported the old status and
+`reload_order()` reported the new one.
+
+`checkout-status` reports only `succeeded`, `failed` or `processing`
+(`WC_Edge_Payment_Outcome::checkout_status()`), and anything that goes wrong —
+an unreachable API, a lock held by the webhook — reads as `processing`. A poll
+that could not look has learnt nothing about the payment, and failing the
+checkout on it would strand a shopper whose money has already moved. The
+`reversed`/`refunded`/`disputed` states report to the shopper as `succeeded`,
+because the payment did go through.
+
+`confirm()` is state-aware, from the read it does before confirming:
+
+| Pre-confirm `processor_state` | What confirm does |
+|---|---|
+| `incomplete`, `ready`, `failed` | `PATCH .../confirm` |
+| `pending`, `processing` | no PATCH, proceed — this is a duplicate submit for the payment already in flight |
+| `succeeded`, `reversed`, `disputed`, `refunded` | no PATCH, proceed — the poll or the webhook completes the order |
+
+All of them are a success to the caller: in every case the order has a payment to
+wait on, and what differs is only whether this call started it.
+
+An **ambiguous confirm** (status 0, 405 or 5xx) is retried at most once, and only
+when the re-read shows the *same* `processor_state` **and** the same
+`updated_at`. A retry of a declined payment runs `failed -> pending ->
+processing -> failed`, and in the sandbox that whole cycle can finish inside the
+window being resolved, so the state alone is no evidence. A changed `updated_at`
+means the PATCH landed and the far side of it is the answer. `failed` on that far
+side comes back as `WP_Error( 'edge_payment_failed' )`, and `process_payment()`
+writes the order `failed` on that one code — see step 7 above.
+
+`in_flight_order()` is what closes the reload window. `checkout-intent` refuses
+with 409 when the session has an adopted attempt updated in the last
+`IN_FLIGHT_WINDOW` (3600s) whose order is Edge, still `on-hold`, still bound to
+that attempt's demand, and whose demand — checked with a real `sync()` — is
+still non-terminal. Anything that stops the sync answering counts as in flight:
+not knowing is not knowing it is over. The script reads the `orderId` off the
+error and resumes waiting on that order instead of minting a second demand. Past
+the hour the order is treated as abandoned and the shopper may start again —
+deliberate: a stuck job at Edge is not a reason to refuse somebody the ability to
+buy, and the trade-off is that the stuck payment could still settle and leave two
+orders to reconcile.
+
+Two more things the retry loop needed:
+
+- **Nonces.** Both REST routes report a stale nonce as
+  `rest_cookie_invalid_nonce`, not a code of their own. `apiFetch`'s nonce
+  middleware refreshes and replays only on that exact code, and a shopper who has
+  just created an account is holding a nonce minted for the guest they no longer
+  are.
+- **Session re-keying.** `woocommerce_guest_session_to_user_id` moves the
+  session's attempt rows to the new user id (`rekey_session()`). WooCommerce
+  migrates the session before the order is processed, and everything an attempt
+  is found by is the session key, so without this adoption looks under the new
+  key, finds nothing, and the order is confirmed with no binding — and the status
+  route, which authorises on the same row, could not find the order either.
+  **Known limit:** the re-key is a bare `UPDATE`, so it fails silently if the
+  user already holds a row with the same `facts_hash` (the
+  `(session_key, facts_hash)` unique key), leaving the order unbound.
+
+**Emails.** The customer on-hold and customer failed-order emails are suppressed
+for Edge orders (`woocommerce_email_enabled_customer_on_hold_order`,
+`woocommerce_email_enabled_customer_failed_order`). The shopper watches the whole
+on-hold-to-settled cycle on the checkout, so both would be noise, and the failed
+email's pay link points at `order-pay`, a surface this gateway refuses. Admin
+emails are unchanged.
+
+**Stock.** On WooCommerce 11 the `on-hold -> failed` move restores stock
+(`wc_maybe_increase_stock_levels` on `woocommerce_order_status_failed`, added in
+11.0.0), and the retry's `on-hold` reduces it again. On WooCommerce < 11 there is
+no such hook, so a failed order keeps its stock reduced — the pre-2.4.0
+behaviour.
 
 Subscribed events are `transaction.payment_demands.created`, `.updated`,
 `.succeeded` and `.failed`, plus `transaction.refund_demands.updated` and
@@ -367,15 +542,69 @@ Subscribed events are `transaction.payment_demands.created`, `.updated`,
 `payment_demands.refunded` and `.disputed` are still listed as subscribable but
 have no emit site: payment demands **lost their `refunded` processor state**
 entirely (ept `8693770ba`, migration `20260827052053`), and refund accounting is
-now derived from the refund demands themselves. The `case 'refunded':` branch in
-`WC_Edge_Webhook_Controller::transition()` is therefore unreachable for anything
-new; it is kept only so a replayed historical delivery still lands somewhere.
+now derived from the refund demands themselves. `refunded` is therefore
+unreachable for anything new; it stays in
+`WC_Edge_Payment_Outcome::RECONCILE_STATES` only so a replayed historical
+delivery still lands somewhere.
 
 `transaction.refund_demands.created` is emitted but deliberately **not**
 subscribed to. Edge records it inside the transaction that creates the refund —
 before the HTTP response this plugin is still waiting on has been rendered — so
 it is the delivery most likely to arrive before WordPress has written down which
 refund it just made. `.updated` and `.failed` carry every outcome that matters.
+
+### Retrying a declined payment
+
+Verified against ept at `7d237fecb` (2026-09-11). That commit is only the tree
+these were read at — it touched none of this.
+
+- **`failed` is the only non-terminal payment-demand state.**
+  `is_confirmable_demand/1` (`lib/core/transactions/payment.ex`) admits
+  `processor_state in [:failed]` and nothing else, and confirming one runs
+  `failed -> pending` (`new_retry_confirm_payment_demand/1`, and
+  `validate_from_states(:processor_state, :failed)` in
+  `lib/core/transactions/payment_demand.ex`). `incomplete` and `ready` are
+  reachable on the same endpoint but they are `PaymentIntent` records, a
+  different schema — the controller falls back to intents when the id is not a
+  demand.
+- **Any other state is a 405.** The fallback clause in
+  `lib/core_http/controllers/payment_demands_controller.ex` returns
+  `:method_not_allowed`, rendered as plain text rather than a JSON:API errors
+  document — which is why `get_status_code()` matters more than `get_errors()`
+  here.
+- **A `payment_method` relationship in a confirm PATCH is accepted and silently
+  ignored.** `confirm/2` never resolves related data the way `create/2` and
+  `update/2` do, and `do_confirm/2` reads neither attributes nor relationships.
+  So a new card cannot be attached by confirming — it comes through the hosted
+  iframe, which handles re-verification against a failed demand itself.
+- **No decline reason is exposed.** The payment demand view
+  (`lib/core_http/views/payment_demands.ex`) carries `cvc2_check`,
+  `address_line1_verification` and `postal_code_verification` and nothing that
+  names the refusal. Issuer decline codes exist internally, on the
+  authorization; they are not on this resource. `unprocessed` is the Ecto schema
+  default for `cvc2_check` (**not** a database column default — the column is a
+  nullable citext), and it carries no positive meaning, which is why
+  `WC_Edge_Payment_Outcome` does not read a CVC failure into it.
+- **`transaction.payment_demands.updated` is emitted on every confirm**,
+  including a retry confirm of a failed demand: the success branch of
+  `do_confirm/2` pipes through `with_events_and_webhooks(:updated)`.
+
+Timing, for anyone waiting on a sandbox payment:
+
+- `Core.EdgeAuthorizePaymentJob` sleeps a uniform **0–25 seconds** before
+  answering (`lib/core/job/edge_authorize_payment_job.ex`). The guard is
+  `Core.env() != "test"`, so it is the environment that decides, not the key
+  prefix — in a dev environment the Edge job handles both prefixes and sleeps
+  either way. There is **no** artificial delay on the live path:
+  `Core.NMIAuthorizePaymentJob` goes straight to the processor, and
+  `Process.sleep` appears nowhere else under `lib/core/job/`.
+- Both authorize jobs are Oban `max_attempts: 1`, so a stuck `processing` is
+  never retried by Edge — it is discarded. (The enqueuing
+  `Core.ProcessPaymentDemandJob` has no `max_attempts` and so takes Oban's
+  default of 20; the guarantee is about the authorize step.)
+- The dev Oban `payments` queue is concurrency **1** (`config/dev.exs`), so
+  parallel test payments serialise rather than overlap. `paay`, the 3DS queue,
+  is 1 as well.
 
 ### Webhook signatures
 
@@ -583,21 +812,38 @@ Two limits are known and deliberate:
 
 ### Test cards
 
-Canonical table lives in `priv/openapi/description.md` in the ept repo. Common
-ones:
+Canonical table lives in `priv/openapi/description.md` in the ept repo. **Which
+stage a card fails at matters** now that a decline is something the checkout
+recovers from: a 3DS failure is caught by `verifyPaymentMethod()` before an order
+exists, while an authorisation decline arrives asynchronously after confirm and
+is what the poll and the retry loop are for. Common ones:
 
-| Number | Result |
-|---|---|
-| `4005519200000004` | Visa approval, frictionless 3DS |
-| `5406004444444443` | Mastercard approval |
-| `370000999999990` | AmEx approval |
-| `6011450103333333` | Discover approval |
-| `4124939999999990` | Generic decline |
-| `4444333322221111` | Insufficient funds |
-| `370000000000002` | Incorrect CVC |
-| `5100060000000002` | 3DS challenge prompt |
-| `370000000100018` | 3DS frictionless failure |
-| `4012000077777777` | Not enrolled in 3DS |
+| Number | Result | Fails at |
+|---|---|---|
+| `4005519200000004` | Visa approval, frictionless 3DS | — |
+| `5406004444444443` | Mastercard approval | — |
+| `370000999999990` | AmEx approval | — |
+| `6011450103333333` | Discover approval | — |
+| `4124939999999990` | Generic decline (`refer_to_card_issuer`, 02) | after confirm |
+| `4444333322221111` | Insufficient funds (51) | after confirm |
+| `370000000000002` | Incorrect CVC (`invalid_cvv2`, 82) | after confirm |
+| `5100060000000002` | 3DS challenge prompt — see below | neither |
+| `370000000100018` | 3DS frictionless failure | `verifyPaymentMethod()` |
+| `4012000077777777` | Not enrolled in 3DS — see below | neither |
+
+`370000000100018` is the only one of these that fails at
+`verifyPaymentMethod()`. The three declines all clear 3DS and then fail
+asynchronously, which is the path worth exercising. The incorrect-CVC card is
+not distinguishable at the checkout: `bad_cvv_avs_verification/1` writes
+`cvc2_check: :unprocessed`, which the plugin deliberately does not read as a CVC
+failure, so that card shows the generic decline copy.
+
+`5100060000000002` and `4012000077777777` do **neither**, verified at ept
+`7d237fecb`: `Core.SandboxAuthenticateCardJob` has only two branches — the
+`370000…0018` failure and the frictionless-pass list — and neither card is in
+either, so the job raises `CaseClauseError`, and at `max_attempts: 1` it is
+discarded and the payment method is never confirmed. `description.md` documents
+behaviour the sandbox job does not implement. Do not plan a test around them.
 
 Not `4242 4242 4242 4242` — that is Stripe's. It appears nowhere in this
 codebase; do not reintroduce it.
@@ -631,9 +877,12 @@ codebase; do not reintroduce it.
   plugin header, the `WC_EDGE_VERSION` constant just below it, `package.json`,
   the `@version` docblock on `WC_Gateway_Edge`, and the `WC_EDGE_VERSION` shim in
   `tests/bootstrap.php`. `ApiClientTest` additionally pins the user agent as a
-  literal (`EdgeWooCommerce/2.3.0`, twice); `ClientFactoryTest` derives it from
-  the constant. Per-file `@since` tags record when a class was introduced and do
-  not move.
+  literal (`EdgeWooCommerce/2.4.0`, twice); `ClientFactoryTest` derives it from
+  the constant. `package-lock.json` carries the version too, in its two top-level
+  `version` fields; npm rewrites them from `package.json` on install, but nothing
+  else does, and it had drifted to 2.0.0 by the time 2.4.0 was cut — set it by
+  hand with the rest. Per-file `@since` tags record when a class was introduced
+  and do not move.
 
 ## Definition of done
 
@@ -644,8 +893,8 @@ finished, confirm that:
 - secrets and card data are on the correct side of the iframe boundary;
 - the JSON:API documents match the backend views, not this plugin's assumptions;
 - retrying, double-submitting or reloading cannot double-charge;
-- order and transaction state is right, and completion still comes from the
-  webhook;
+- order and transaction state is right, and completion still comes from a read of
+  the demand — the webhook or the checkout poll, never from `process_payment()`;
 - failures produce something useful to the shopper;
 - anything that changed in this file's territory is reflected above.
 
@@ -653,6 +902,13 @@ For manual end-to-end work, use a sandbox key pair and a disposable order, and
 cover at least: success, decline, an expired or invalid iframe state, double
 submit, page reload mid-checkout, an API failure, and a delayed or duplicated
 webhook. Never test against live credentials or real card data.
+
+The retry loop added its own list. Also cover: a decline followed by a retry with
+**another** card on the same order; a soft decline followed by a retry with the
+**same** card; a reload mid-wait, which must resume the order already in flight
+rather than mint a second demand; a guest who creates an account at the checkout;
+a `failed` webhook replayed after a successful retry, which must be a no-change;
+and `succeeded` delivered twice, which must produce one `payment_complete()`.
 
 For a refund change, also cover: a partial refund, a second partial that settles
 the balance, a full refund, an over-refund (which has to be provoked from outside

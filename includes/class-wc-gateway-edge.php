@@ -15,9 +15,39 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Edge Gateway.
  *
  * @class    WC_Gateway_Edge
- * @version  2.3.0
+ * @version  2.4.0
  */
 class WC_Gateway_Edge extends WC_Payment_Gateway {
+
+	/**
+	 * How many times process_payment() reaches for the demand lock.
+	 *
+	 * @var int
+	 */
+	const LOCK_ATTEMPTS = 3;
+
+	/**
+	 * Microseconds between those tries.
+	 *
+	 * @var int
+	 */
+	const LOCK_RETRY_DELAY_US = 300000;
+
+	/**
+	 * Lease length for the lock process_payment() holds.
+	 *
+	 * The sync's 30s default is sized for one round trip to Edge, which is all
+	 * that method makes. The critical section here is four: the read before the
+	 * PATCH, the PATCH, and - when the PATCH comes back unanswered - the read and
+	 * the single retry that resolve it. Each is capped at
+	 * WC_Edge_API_Client::TIMEOUT (15s), so 4 x 15 is the worst case, plus 30s of
+	 * margin for the order writes either side of it. Anything shorter lets the
+	 * lease expire mid-confirm, and a poll or a webhook then takes it over and
+	 * writes the order underneath a confirm that is still running.
+	 *
+	 * @var int
+	 */
+	const CONFIRM_LOCK_TTL = 90;
 
 	/**
 	 * Secret (server-only) API key.
@@ -423,6 +453,15 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 	 * the card, and all that crosses the boundary is an opaque demand id, which
 	 * is only ever used to cross-check the binding the server already holds.
 	 *
+	 * The result is `pending` rather than `success`, which the Store API answers
+	 * as a 202: the payment has been accepted for processing and nobody yet knows
+	 * whether it worked. The block script waits on the checkout for that outcome,
+	 * so `edge_demand_id` and `edge_order_id` are handed back alongside -
+	 * WooCommerce merges the whole return array into the response's payment
+	 * details, where the script reads them (verified in WooCommerce 11.0.0,
+	 * `src/StoreApi/Legacy.php`). `redirect` stays the fallback for any client
+	 * that does not wait.
+	 *
 	 * @param int $order_id Order ID.
 	 * @return array
 	 */
@@ -440,29 +479,126 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 			return $this->fail( __( 'That payment reference is not valid.', 'edge-gateway' ) );
 		}
 
-		$confirmed = WC_Edge_Payment_Service::confirm( $this, $order, $submitted );
+		// Confirm and the status write that follows it are one step as far as
+		// everything else is concerned. Blocks leaves the order `pending` on the
+		// way in here, and Edge can settle before this method has written
+		// `on-hold`: a webhook arriving in that window either reads a status the
+		// outcome rules call stale and does nothing, or completes the order only
+		// for the copy held below to put `on-hold` back over it. Holding the lock
+		// across both makes the webhook fail and be redelivered, and the poll
+		// answer `processing`, which are both the right answers for that second.
+		$bound_demand_id = (string) $order->get_meta( '_edge_demand_id' );
+		$lock_owner      = false;
 
-		if ( is_wp_error( $confirmed ) ) {
-			return $this->fail( $confirmed->get_error_message() );
+		if ( '' !== $bound_demand_id ) {
+			$lock_owner = $this->take_demand_lock( $bound_demand_id );
+
+			if ( false === $lock_owner ) {
+				return $this->fail( __( 'Your payment is still being processed. Please wait a moment and try again.', 'edge-gateway' ) );
+			}
 		}
 
-		$order->set_transaction_id( $confirmed );
+		// An order with no binding at all is left to the payment service, which
+		// already has the right refusal for it.
+		try {
+			$confirmed = WC_Edge_Payment_Service::confirm( $this, $order, $submitted );
 
-		// Confirming means Edge accepted the payment for processing, not that it
-		// succeeded. Completing the order here would mark it paid before the
-		// processor has said anything, so the order waits for the webhook, which
-		// is the authoritative source.
-		$order->update_status(
-			'on-hold',
-			__( 'Awaiting confirmation from Edge.', 'edge-gateway' )
-		);
+			if ( is_wp_error( $confirmed ) ) {
+				if ( 'edge_payment_failed' === $confirmed->get_error_code() ) {
+					// The ambiguous path read the demand back and found the bank had
+					// declined it. Nothing else will ever say so: `failed` only
+					// applies from `on-hold`, so the webhook that follows is a
+					// no-change against the `pending` order Blocks left behind, and
+					// the merchant is left with an order that looks abandoned. Same
+					// wording as WC_Edge_Order_Sync, because it is the same news.
+					$order->update_status( 'failed', __( 'Edge declined this payment.', 'edge-gateway' ) );
+				}
 
-		$order->save();
+				return $this->fail( $confirmed->get_error_message() );
+			}
+
+			$demand_id = $confirmed['demand_id'];
+
+			// Edge can settle while the confirm response is still in flight, and
+			// the webhook completes the order from another request. Re-read so this
+			// one does not write a stale status back over it - through the helper,
+			// because a plain wc_get_order() would be answered from the copy this
+			// request already loaded and show nothing of that webhook's write.
+			$fresh = WC_Edge_Order_Sync::reload_order( $order_id );
+
+			if ( $fresh instanceof WC_Order ) {
+				$order = $fresh;
+			}
+
+			if ( 'failed' === $confirmed['prior_state'] ) {
+				// The same demand, confirmed again after the bank said no. Worth
+				// saying on the order, because the attempts are otherwise
+				// indistinguishable.
+				$order->add_order_note( __( 'Retrying the payment with Edge after a decline.', 'edge-gateway' ) );
+			}
+
+			$order->set_transaction_id( $demand_id );
+
+			// Confirming means Edge accepted the payment for processing, not that
+			// it succeeded. Completing the order here would mark it paid before the
+			// processor has said anything, so the order waits for the webhook, which
+			// is the authoritative source - unless that has already arrived, in which
+			// case on-hold would be a step backwards.
+			if ( ! $order->is_paid() ) {
+				$order->update_status(
+					'on-hold',
+					__( 'Awaiting confirmation from Edge.', 'edge-gateway' )
+				);
+			}
+
+			$order->save();
+		} finally {
+			if ( false !== $lock_owner ) {
+				WC_Edge_Demand_Lock::release( $bound_demand_id, $lock_owner );
+			}
+		}
 
 		return array(
-			'result'   => 'success',
-			'redirect' => $this->get_return_url( $order ),
+			'result'         => 'pending',
+			'redirect'       => $this->get_return_url( $order ),
+			'edge_demand_id' => $demand_id,
+			// The order id goes back the same way for the same reason. Blocks
+			// seeds its checkout store's `orderId` from the draft order in the
+			// opening GET /wc/store/v1/checkout and never refreshes it from the
+			// POST response, so on a fresh session the `onCheckoutSuccess`
+			// observer is handed 0 and has nothing to poll for (WooCommerce
+			// 11.0.0). This value is the order that was actually paid.
+			'edge_order_id'  => (string) $order->get_id(),
 		);
+	}
+
+	/**
+	 * Wait a short while for the demand lock, rather than refusing on the first try.
+	 *
+	 * The holder is a sync that is one round trip to Edge from finishing, so a
+	 * shopper who double-submits is better served by waiting a moment than by
+	 * being told to try again. Three tries is under a second, which is short
+	 * enough that the request does not sit on a PHP worker.
+	 *
+	 * @param string $demand_id Demand the order is bound to.
+	 * @return string|false Owner token, or false if somebody kept hold of it.
+	 */
+	private function take_demand_lock( $demand_id ) {
+		for ( $attempt = 0; $attempt < self::LOCK_ATTEMPTS; $attempt++ ) {
+			if ( $attempt > 0 ) {
+				usleep( self::LOCK_RETRY_DELAY_US );
+			}
+
+			$owner = WC_Edge_Demand_Lock::acquire( $demand_id, self::CONFIRM_LOCK_TTL );
+
+			if ( false !== $owner ) {
+				return $owner;
+			}
+		}
+
+		WC_Edge_Logger::info( 'Gave up waiting for the sync lock on demand ' . $demand_id );
+
+		return false;
 	}
 
 	/**
