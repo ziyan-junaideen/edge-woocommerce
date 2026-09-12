@@ -2,7 +2,7 @@
 /**
  * Receives Edge webhooks and moves orders to their final state.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.0.0
  */
 
@@ -402,7 +402,7 @@ final class WC_Edge_Webhook_Controller {
 				$order->add_order_note(
 					sprintf(
 						/* translators: 1: refund amount, 2: Edge refund demand id. */
-						__( 'Edge confirmed the refund of %1$s (%2$s).', 'edge-gateway' ),
+						__( 'Edge confirmed the refund of %1$s (%2$s).', 'deens-edge-payments-for-woocommerce' ),
 						wc_price( $refund->get_amount(), array( 'currency' => $order->get_currency() ) ),
 						$refund_id
 					)
@@ -420,7 +420,7 @@ final class WC_Edge_Webhook_Controller {
 				$order->add_order_note(
 					sprintf(
 						/* translators: 1: refund amount, 2: Edge refund demand id. */
-						__( 'Edge could not process the refund of %1$s (%2$s). The money was NOT returned to the customer, but WooCommerce has already recorded the refund, restocked the items and emailed the customer. Delete the refund on this order to put the balance and the stock back, then decide whether to try again.', 'edge-gateway' ),
+						__( 'Edge could not process the refund of %1$s (%2$s). The money was NOT returned to the customer, but WooCommerce has already recorded the refund, restocked the items and emailed the customer. Delete the refund on this order to put the balance and the stock back, then decide whether to try again.', 'deens-edge-payments-for-woocommerce' ),
 						wc_price( $refund->get_amount(), array( 'currency' => $order->get_currency() ) ),
 						$refund_id
 					)
@@ -443,7 +443,7 @@ final class WC_Edge_Webhook_Controller {
 				$order->add_order_note(
 					sprintf(
 						/* translators: %s: unrecognised refund state. */
-						__( 'Edge reported an unrecognised refund state: %s.', 'edge-gateway' ),
+						__( 'Edge reported an unrecognised refund state: %s.', 'deens-edge-payments-for-woocommerce' ),
 						$state
 					)
 				);
@@ -482,7 +482,7 @@ final class WC_Edge_Webhook_Controller {
 		$order->add_order_note(
 			sprintf(
 				/* translators: 1: refund amount, 2: refund state, 3: Edge refund demand id. */
-				__( 'Edge reported a refund of %1$s (%2$s) that was not created in WooCommerce: %3$s. Reconcile it here if it should show on this order.', 'edge-gateway' ),
+				__( 'Edge reported a refund of %1$s (%2$s) that was not created in WooCommerce: %3$s. Reconcile it here if it should show on this order.', 'deens-edge-payments-for-woocommerce' ),
 				wc_price( WC_Edge_Money::from_cents( $cents ), array( 'currency' => $order->get_currency() ) ),
 				$state,
 				$refund_id

@@ -2,7 +2,7 @@
 /**
  * Short-lived exclusive lease over one Edge payment demand.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.4.0
  */
 

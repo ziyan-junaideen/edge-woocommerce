@@ -10,7 +10,7 @@
  * implementations rather than mocks, so a test failure means our code is wrong
  * rather than the stub being wrong.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  */
 
 define( 'WC_EDGE_TESTING', true );

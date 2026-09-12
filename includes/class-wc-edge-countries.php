@@ -2,7 +2,7 @@
 /**
  * ISO 3166-1 country codes.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.0.0
  */
 

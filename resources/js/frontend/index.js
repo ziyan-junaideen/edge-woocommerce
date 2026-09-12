@@ -17,7 +17,7 @@ import apiFetch from '@wordpress/api-fetch';
 
 const settings = getSetting( 'edge_data', {} );
 
-const label = decodeEntities( settings.title ) || __( 'Credit Card', 'edge-gateway' );
+const label = decodeEntities( settings.title ) || __( 'Credit Card', 'deens-edge-payments-for-woocommerce' );
 
 /**
  * How long to wait for a verification outcome before giving up.
@@ -120,7 +120,7 @@ const declineMessage = ( response ) =>
 		? response.message
 		: __(
 				'Your payment was declined. Please check your card details or try another card.',
-				'edge-gateway'
+				'deens-edge-payments-for-woocommerce'
 		  );
 
 const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
@@ -244,7 +244,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 						error?.message ||
 							__(
 								'We could not start your card payment. Please try again.',
-								'edge-gateway'
+								'deens-edge-payments-for-woocommerce'
 							)
 					);
 				} );
@@ -268,7 +268,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 			setFailure(
 				__(
 					'The secure payment form could not be loaded. Please refresh and try again.',
-					'edge-gateway'
+					'deens-edge-payments-for-woocommerce'
 				)
 			);
 
@@ -288,7 +288,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 					ok: false,
 					message: __(
 						'Your bank could not verify that card. Please check the details or try another card.',
-						'edge-gateway'
+						'deens-edge-payments-for-woocommerce'
 					),
 				} );
 			} ),
@@ -299,7 +299,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 					ok: false,
 					message: __(
 						'That card could not be authenticated. Please try another card.',
-						'edge-gateway'
+						'deens-edge-payments-for-woocommerce'
 					),
 				} );
 			} ),
@@ -332,7 +332,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 			setFailure(
 				__(
 					'The secure payment form could not be displayed. Please refresh and try again.',
-					'edge-gateway'
+					'deens-edge-payments-for-woocommerce'
 				)
 			);
 		}
@@ -346,7 +346,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 
 			settle( {
 				ok: false,
-				message: __( 'Payment was interrupted. Please try again.', 'edge-gateway' ),
+				message: __( 'Payment was interrupted. Please try again.', 'deens-edge-payments-for-woocommerce' ),
 			} );
 
 			mountedDemand.current = null;
@@ -378,7 +378,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 				return fail(
 					__(
 						'Your previous payment is still being processed. Please wait a moment.',
-						'edge-gateway'
+						'deens-edge-payments-for-woocommerce'
 					)
 				);
 			}
@@ -387,7 +387,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 				return fail(
 					__(
 						'The payment form is not ready yet. Please wait a moment and try again.',
-						'edge-gateway'
+						'deens-edge-payments-for-woocommerce'
 					)
 				);
 			}
@@ -401,7 +401,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 
 				if ( ! client ) {
 					return fail(
-						__( 'The secure payment form is unavailable.', 'edge-gateway' )
+						__( 'The secure payment form is unavailable.', 'deens-edge-payments-for-woocommerce' )
 					);
 				}
 
@@ -412,7 +412,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 							ok: false,
 							message: __(
 								'Verifying your card took too long. Please try again.',
-								'edge-gateway'
+								'deens-edge-payments-for-woocommerce'
 							),
 						} );
 					}, VERIFY_TIMEOUT_MS );
@@ -436,7 +436,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 				} catch ( error ) {
 					settle( {
 						ok: false,
-						message: __( 'Your card could not be verified.', 'edge-gateway' ),
+						message: __( 'Your card could not be verified.', 'deens-edge-payments-for-woocommerce' ),
 					} );
 				}
 			}
@@ -455,7 +455,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 				return fail(
 					__(
 						'Your card details changed. Please submit again to verify them.',
-						'edge-gateway'
+						'deens-edge-payments-for-woocommerce'
 					)
 				);
 			}
@@ -823,7 +823,7 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 				setFailure(
 					__(
 						'Your previous payment is still being processed. Please try again in a few minutes.',
-						'edge-gateway'
+						'deens-edge-payments-for-woocommerce'
 					)
 				);
 			}
@@ -868,11 +868,11 @@ const EdgePaymentForm = ( { eventRegistration, emitResponse } ) => {
 					{ 'slow' === waitStage
 						? __(
 								'This is taking longer than usual. Please keep this page open.',
-								'edge-gateway'
+								'deens-edge-payments-for-woocommerce'
 						  )
 						: __(
 								'Waiting for your bank to confirm your payment…',
-								'edge-gateway'
+								'deens-edge-payments-for-woocommerce'
 						  ) }
 				</div>
 			) }
@@ -899,7 +899,7 @@ const EdgeEditorPreview = () => (
 		<p>
 			{ __(
 				'The secure card form from Edge appears here at checkout.',
-				'edge-gateway'
+				'deens-edge-payments-for-woocommerce'
 			) }
 		</p>
 	</div>

@@ -2,7 +2,7 @@
 /**
  * Applies an Edge payment demand's authoritative state to its order.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.4.0
  */
 
@@ -42,7 +42,7 @@ final class WC_Edge_Order_Sync {
 		$demand_id = (string) $order->get_meta( '_edge_demand_id' );
 
 		if ( '' === $demand_id ) {
-			return new WP_Error( 'edge_no_binding', __( 'This order is not bound to an Edge payment.', 'edge-gateway' ) );
+			return new WP_Error( 'edge_no_binding', __( 'This order is not bound to an Edge payment.', 'deens-edge-payments-for-woocommerce' ) );
 		}
 
 		$owner = WC_Edge_Demand_Lock::acquire( $demand_id );
@@ -52,14 +52,14 @@ final class WC_Edge_Order_Sync {
 			// caller, or process_payment() still writing the order it has just
 			// confirmed. Callers differ on what to do about it: the webhook asks
 			// Edge to redeliver, the poll tells the shopper to keep waiting.
-			return new WP_Error( 'edge_sync_locked', __( 'This payment is already being updated.', 'edge-gateway' ) );
+			return new WP_Error( 'edge_sync_locked', __( 'This payment is already being updated.', 'deens-edge-payments-for-woocommerce' ) );
 		}
 
 		try {
 			$fresh = self::reload_order( $order->get_id() );
 
 			if ( ! $fresh instanceof WC_Order ) {
-				return new WP_Error( 'edge_no_binding', __( 'That order could not be found.', 'edge-gateway' ) );
+				return new WP_Error( 'edge_no_binding', __( 'That order could not be found.', 'deens-edge-payments-for-woocommerce' ) );
 			}
 
 			$bound = (string) $fresh->get_meta( '_edge_demand_id' );
@@ -68,7 +68,7 @@ final class WC_Edge_Order_Sync {
 				// A declined shopper who edits their details gets a new demand, and
 				// adoption rebinds the order to it. News about the demand we were
 				// asked about is no longer news about this order.
-				return new WP_Error( 'edge_binding_moved', __( 'This order has moved on to another payment.', 'edge-gateway' ) );
+				return new WP_Error( 'edge_binding_moved', __( 'This order has moved on to another payment.', 'deens-edge-payments-for-woocommerce' ) );
 			}
 
 			$api = WC_Edge_Client_Factory::client( $gateway->get_secret_key() );
@@ -180,19 +180,19 @@ final class WC_Edge_Order_Sync {
 		switch ( $outcome ) {
 			case WC_Edge_Payment_Outcome::COMPLETE:
 				$order->payment_complete( $demand_id );
-				$order->add_order_note( __( 'Edge confirmed this payment succeeded.', 'edge-gateway' ) );
+				$order->add_order_note( __( 'Edge confirmed this payment succeeded.', 'deens-edge-payments-for-woocommerce' ) );
 
 				return;
 
 			case WC_Edge_Payment_Outcome::IGNORED_STALE_FAILURE:
 				$order->add_order_note(
-					__( 'Edge reported a failure for a payment already marked paid. Not changing the order.', 'edge-gateway' )
+					__( 'Edge reported a failure for a payment already marked paid. Not changing the order.', 'deens-edge-payments-for-woocommerce' )
 				);
 
 				return;
 
 			case WC_Edge_Payment_Outcome::FAIL:
-				$order->update_status( 'failed', __( 'Edge declined this payment.', 'edge-gateway' ) );
+				$order->update_status( 'failed', __( 'Edge declined this payment.', 'deens-edge-payments-for-woocommerce' ) );
 
 				return;
 
@@ -201,7 +201,7 @@ final class WC_Edge_Order_Sync {
 				$order->add_order_note(
 					sprintf(
 						/* translators: %s: Edge processor state. */
-						__( 'Edge reported this payment as %s. Reconcile it in the Edge dashboard.', 'edge-gateway' ),
+						__( 'Edge reported this payment as %s. Reconcile it in the Edge dashboard.', 'deens-edge-payments-for-woocommerce' ),
 						$state
 					)
 				);
@@ -213,7 +213,7 @@ final class WC_Edge_Order_Sync {
 				$order->add_order_note(
 					sprintf(
 						/* translators: %s: unrecognised state. */
-						__( 'Edge reported an unrecognised payment state: %s.', 'edge-gateway' ),
+						__( 'Edge reported an unrecognised payment state: %s.', 'deens-edge-payments-for-woocommerce' ),
 						$state
 					)
 				);

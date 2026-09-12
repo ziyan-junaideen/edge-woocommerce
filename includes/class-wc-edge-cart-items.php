@@ -2,7 +2,7 @@
 /**
  * Reads the cart into the plain values a payment line item needs.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.1.0
  */
 
@@ -219,7 +219,7 @@ final class WC_Edge_Cart_Items {
 				$description,
 				sprintf(
 					/* translators: %s: the quantity as WooCommerce recorded it, which may be fractional. */
-					__( 'Quantity: %s', 'edge-gateway' ),
+					__( 'Quantity: %s', 'deens-edge-payments-for-woocommerce' ),
 					$quantity['label']
 				)
 			);

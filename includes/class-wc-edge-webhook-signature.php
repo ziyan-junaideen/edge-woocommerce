@@ -2,7 +2,7 @@
 /**
  * Verifies the signature on an inbound Edge webhook.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.3.0
  */
 

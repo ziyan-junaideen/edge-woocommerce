@@ -2,7 +2,7 @@
 /**
  * Storage for pre-order checkout attempts.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.0.0
  */
 
@@ -173,7 +173,7 @@ final class WC_Edge_Attempt_Store {
 		// The insert failed for a reason other than the unique key.
 		return new WP_Error(
 			'edge_attempt_not_stored',
-			__( 'Could not start the payment. Please try again.', 'edge-gateway' )
+			__( 'Could not start the payment. Please try again.', 'deens-edge-payments-for-woocommerce' )
 		);
 	}
 

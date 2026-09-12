@@ -1,12 +1,12 @@
 <?php
 /**
- * Plugin Name: Edge Payments Gateway
- * Plugin URI: https://github.com/Edge-Payment-Technologies/edge-woocommerce
- * Description: Adds the Edge Payments gateway to your WooCommerce website.
+ * Plugin Name: Deen's Edge Payments for WooCommerce
+ * Plugin URI: https://github.com/ziyan-junaideen/edge-woocommerce
+ * Description: Accept payments through Edge Payment Technologies on your WooCommerce store. An independent plugin, not affiliated with or endorsed by Edge. Provided as is, without warranty of any kind.
  * Version: 2.4.0
  *
- * Author: Edge Payments
- * Author URI: https://tryedge.io
+ * Author: Ziyan Junaideen
+ * Author URI: https://www.jdeen.com
  *
  * Requires at least: 6.4
  * Requires PHP: 7.4
@@ -17,10 +17,10 @@
  * License: GPL-3.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-3.0.html
  *
- * Text Domain: edge-gateway
+ * Text Domain: deens-edge-payments-for-woocommerce
  * Domain Path: /languages
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  */
 
 // Exit if accessed directly.

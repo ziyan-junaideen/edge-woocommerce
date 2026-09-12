@@ -2,7 +2,7 @@
 /**
  * Edge Payments Blocks integration
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   1.0.3
  */
 
@@ -103,7 +103,7 @@ final class WC_Gateway_Edge_Blocks_Support extends AbstractPaymentMethodType {
 		);
 
 		if ( function_exists( 'wp_set_script_translations' ) ) {
-			wp_set_script_translations( 'wc-edge-payments-blocks', 'edge-gateway', WC_Edge_Payments::plugin_abspath() . 'languages/' );
+			wp_set_script_translations( 'wc-edge-payments-blocks', 'deens-edge-payments-for-woocommerce', WC_Edge_Payments::plugin_abspath() . 'languages/' );
 		}
 
 		return array( 'wc-edge-payments-blocks' );
@@ -154,7 +154,7 @@ final class WC_Gateway_Edge_Blocks_Support extends AbstractPaymentMethodType {
 			$description = trim(
 				$description . ' ' . sprintf(
 					/* translators: 1: Visa test card number, 2: declining test card number. */
-					__( 'Sandbox mode: no real payment is taken. Use %1$s for an approval or %2$s for a decline.', 'edge-gateway' ),
+					__( 'Sandbox mode: no real payment is taken. Use %1$s for an approval or %2$s for a decline.', 'deens-edge-payments-for-woocommerce' ),
 					'4005519200000004',
 					'4124939999999990'
 				)

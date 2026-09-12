@@ -2,7 +2,7 @@
 /**
  * Refunds an Edge payment on behalf of the gateway.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.2.0
  */
 
@@ -95,7 +95,7 @@ final class WC_Edge_Refund_Service {
 			// A restock-only refund. There is nothing to reverse at the gateway,
 			// and sending it would be a 422: Edge requires a positive amount.
 			$order->add_order_note(
-				__( 'No Edge refund was sent: this refund is for zero.', 'edge-gateway' )
+				__( 'No Edge refund was sent: this refund is for zero.', 'deens-edge-payments-for-woocommerce' )
 			);
 
 			return true;
@@ -109,7 +109,7 @@ final class WC_Edge_Refund_Service {
 			// refund is worse than no refund at all.
 			return new WP_Error(
 				'edge_refund_no_row',
-				__( 'Edge refunds must be created through the WooCommerce refund form.', 'edge-gateway' )
+				__( 'Edge refunds must be created through the WooCommerce refund form.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -167,7 +167,7 @@ final class WC_Edge_Refund_Service {
 		if ( '' === $demand_id ) {
 			return new WP_Error(
 				'edge_no_binding',
-				__( 'This order has no Edge payment recorded against it, so it cannot be refunded here.', 'edge-gateway' )
+				__( 'This order has no Edge payment recorded against it, so it cannot be refunded here.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -183,7 +183,7 @@ final class WC_Edge_Refund_Service {
 				'edge_mode_mismatch',
 				sprintf(
 					/* translators: 1: the mode the order was paid in, 2: the mode the gateway is configured for. */
-					__( 'This order was paid in %1$s mode but the gateway is configured for %2$s. Restore the matching API key before refunding it.', 'edge-gateway' ),
+					__( 'This order was paid in %1$s mode but the gateway is configured for %2$s. Restore the matching API key before refunding it.', 'deens-edge-payments-for-woocommerce' ),
 					$order_mode,
 					$mode
 				)
@@ -196,14 +196,14 @@ final class WC_Edge_Refund_Service {
 		if ( ! $order->get_date_paid() && ! $order->is_paid() ) {
 			return new WP_Error(
 				'edge_not_captured',
-				__( 'Edge has not confirmed this payment succeeded yet, so there is nothing to refund.', 'edge-gateway' )
+				__( 'Edge has not confirmed this payment succeeded yet, so there is nothing to refund.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
 		if ( ! WC_Edge_Money::is_supported_currency( $order->get_currency() ) ) {
 			return new WP_Error(
 				'edge_currency_unsupported',
-				__( 'Edge can only refund orders in US dollars.', 'edge-gateway' )
+				__( 'Edge can only refund orders in US dollars.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -227,7 +227,7 @@ final class WC_Edge_Refund_Service {
 		if ( null === $amount || '' === $amount ) {
 			return new WP_Error(
 				'edge_refund_amount_missing',
-				__( 'A refund amount is required.', 'edge-gateway' )
+				__( 'A refund amount is required.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -240,7 +240,7 @@ final class WC_Edge_Refund_Service {
 		} catch ( \Throwable $e ) {
 			return new WP_Error(
 				'edge_refund_amount_invalid',
-				__( 'That refund amount could not be read as an amount of money.', 'edge-gateway' )
+				__( 'That refund amount could not be read as an amount of money.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 	}
@@ -279,7 +279,7 @@ final class WC_Edge_Refund_Service {
 
 			return new WP_Error(
 				'edge_refund_unresolved',
-				__( 'An earlier Edge refund for this order has an unknown outcome, and Edge could not be reached to check. Refunding again could refund twice, so it has been stopped. Try again shortly.', 'edge-gateway' )
+				__( 'An earlier Edge refund for this order has an unknown outcome, and Edge could not be reached to check. Refunding again could refund twice, so it has been stopped. Try again shortly.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -314,7 +314,7 @@ final class WC_Edge_Refund_Service {
 					'edge_refund_outstanding',
 					sprintf(
 						/* translators: 1: outstanding refund amount, 2: Edge refund demand id. */
-						__( 'An earlier Edge refund of %1$s (%2$s) is not recorded against this order yet. Refund that same amount to adopt it, or resolve it in the Edge dashboard first - sending a different refund now could refund twice.', 'edge-gateway' ),
+						__( 'An earlier Edge refund of %1$s (%2$s) is not recorded against this order yet. Refund that same amount to adopt it, or resolve it in the Edge dashboard first - sending a different refund now could refund twice.', 'deens-edge-payments-for-woocommerce' ),
 						wc_price( WC_Edge_Money::from_cents( $sent ), array( 'currency' => $order->get_currency() ) ),
 						$found->id
 					)
@@ -327,7 +327,7 @@ final class WC_Edge_Refund_Service {
 			$order->add_order_note(
 				sprintf(
 					/* translators: 1: refund amount, 2: Edge refund demand id. */
-					__( 'Adopted an Edge refund of %1$s that an earlier attempt had already created (%2$s). No second refund was sent.', 'edge-gateway' ),
+					__( 'Adopted an Edge refund of %1$s that an earlier attempt had already created (%2$s). No second refund was sent.', 'deens-edge-payments-for-woocommerce' ),
 					wc_price( WC_Edge_Money::from_cents( $sent ), array( 'currency' => $order->get_currency() ) ),
 					$found->id
 				)
@@ -366,7 +366,7 @@ final class WC_Edge_Refund_Service {
 			if ( $same_demand && $same_amount ) {
 				return new WP_Error(
 					'edge_refund_in_flight',
-					__( 'An identical Edge refund for this order is still in flight. Wait for it to settle before sending another.', 'edge-gateway' )
+					__( 'An identical Edge refund for this order is still in flight. Wait for it to settle before sending another.', 'deens-edge-payments-for-woocommerce' )
 				);
 			}
 		}
@@ -448,14 +448,14 @@ final class WC_Edge_Refund_Service {
 		$order->add_order_note(
 			sprintf(
 				/* translators: %s: refund amount. */
-				__( 'An Edge refund of %s was sent but its outcome is unknown. It has been recorded, and the next refund attempt on this order will check for it before sending anything. Do not refund again in the Edge dashboard until this is resolved.', 'edge-gateway' ),
+				__( 'An Edge refund of %s was sent but its outcome is unknown. It has been recorded, and the next refund attempt on this order will check for it before sending anything. Do not refund again in the Edge dashboard until this is resolved.', 'deens-edge-payments-for-woocommerce' ),
 				wc_price( WC_Edge_Money::from_cents( $cents ), array( 'currency' => $order->get_currency() ) )
 			)
 		);
 
 		return new WP_Error(
 			'edge_refund_unresolved',
-			__( 'Edge did not confirm this refund. It has been recorded and will be checked before any further refund is sent. Check the order notes.', 'edge-gateway' )
+			__( 'Edge did not confirm this refund. It has been recorded and will be checked before any further refund is sent. Check the order notes.', 'deens-edge-payments-for-woocommerce' )
 		);
 	}
 
@@ -558,7 +558,7 @@ final class WC_Edge_Refund_Service {
 		$order->add_order_note(
 			sprintf(
 				/* translators: 1: refund amount, 2: Edge refund demand id. */
-				__( 'Edge accepted a refund of %1$s (%2$s). It is pending until Edge confirms it.', 'edge-gateway' ),
+				__( 'Edge accepted a refund of %1$s (%2$s). It is pending until Edge confirms it.', 'deens-edge-payments-for-woocommerce' ),
 				wc_price( WC_Edge_Money::from_cents( $cents ), array( 'currency' => $order->get_currency() ) ),
 				$refund_id
 			)
@@ -705,7 +705,7 @@ final class WC_Edge_Refund_Service {
 
 		return sprintf(
 			/* translators: %s: reason Edge gave for refusing the refund. */
-			__( 'Edge refused this refund: %s', 'edge-gateway' ),
+			__( 'Edge refused this refund: %s', 'deens-edge-payments-for-woocommerce' ),
 			implode( '; ', array_keys( $details ) )
 		);
 	}
@@ -716,6 +716,6 @@ final class WC_Edge_Refund_Service {
 	 * @return string
 	 */
 	private static function generic_failure() {
-		return __( 'The refund could not be sent to Edge. Check the Edge payments log and try again.', 'edge-gateway' );
+		return __( 'The refund could not be sent to Edge. Check the Edge payments log and try again.', 'deens-edge-payments-for-woocommerce' );
 	}
 }

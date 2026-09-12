@@ -3,6 +3,18 @@
 WooCommerce payment gateway for **Edge Payment Technologies**. A PHP plugin plus
 a small React bundle for the WooCommerce Blocks checkout.
 
+Distributed as **Deen's Edge Payments for WooCommerce**, an independent plugin by
+Ziyan Junaideen — *not* Edge's official one. The WordPress.org slug, the folder
+name inside the release ZIP and the text domain are all
+`deens-edge-payments-for-woocommerce`; the main plugin file stays
+`edge-gateway.php`, deliberately, because renaming it changes `plugin_basename`
+and would silently deactivate existing installs. The gateway id (`edge`), the
+REST namespace (`edge/v1`), the `WC_Edge_*`/`WC_EDGE_*` prefixes and the
+`EdgeWooCommerce/` user agent are **unchanged and must stay that way** — they are
+persisted on orders, registered with Edge, or visible on the wire. Licensed
+GPL-3.0-or-later (`LICENSE`); the upstream MIT notice is retained in `NOTICE.md`
+and must not be removed.
+
 The v2 API migration is **finished** (merged as #8, 2026-08-15). This is a
 maintenance codebase, not a port in progress — do not write compatibility shims
 for the old direct-card/token flow, and do not treat the legacy behaviour as
@@ -104,7 +116,13 @@ includes/
 resources/js/frontend/index.js       block checkout payment method (source)
 assets/js/frontend/blocks.js         built bundle — generated, never edit
 webpack.config.js                    externalises @woocommerce/* to wc.wcBlocksRegistry etc.
-bin/build-release.sh                 release ZIP: sources + built JS, no vendor/, no prefixing
+bin/build-release.sh                 release ZIP: sources + built JS, no vendor/, no prefixing.
+                                     `PLUGIN_SLUG` here is the installed folder name
+readme.txt                           WordPress.org listing: header block, description,
+                                     disclaimer, FAQ, changelog. `Stable tag` must track
+                                     the version
+NOTICE.md                            upstream MIT notice + trademark statement; ships in
+                                     the ZIP
 bin/build_i18n.sh                    JSON translations; needs a global `wp` binary
 tests/bootstrap.php                  WordPress shims, including a fake wp_remote_request(); loads the
                                      pure classes directly, WC_Edge_Payment_Outcome among them
@@ -862,7 +880,11 @@ codebase; do not reintroduce it.
 - Sanitise input (`sanitize_text_field`, `absint`, `wp_kses_post`), unslash
   before sanitising, escape at output (`esc_html`, `esc_attr`, `esc_url`).
 - Protect state-changing endpoints with nonces and session/capability checks.
-- Text domain is `edge-gateway` in both PHP and JS.
+- Text domain is `deens-edge-payments-for-woocommerce` in both PHP and JS, and
+  must equal the WordPress.org slug or translate.wordpress.org will not serve
+  translations. `phpcs.xml` pins it in a `text_domain` property, so PHPCS is what
+  catches a missed one. The `.pot` filename in `package.json`'s `i18n:pot` script
+  follows the same name.
 - Frontend settings go through the Blocks integration. Never interpolate secrets
   or unescaped JSON into an inline script.
 - Log through `WC_Edge_Logger`, never directly. Do not log keys, full API

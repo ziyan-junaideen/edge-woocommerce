@@ -2,7 +2,7 @@
 /**
  * Edge API key parsing and live/sandbox mode derivation.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.0.0
  */
 

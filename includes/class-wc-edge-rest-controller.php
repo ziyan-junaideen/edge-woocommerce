@@ -2,7 +2,7 @@
 /**
  * REST endpoint the block checkout calls before mounting the hosted form.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.0.0
  */
 
@@ -87,7 +87,7 @@ final class WC_Edge_REST_Controller {
 		if ( ! WC()->cart || WC()->cart->is_empty() ) {
 			return new WP_Error(
 				'edge_cart_empty',
-				__( 'Your cart is empty.', 'edge-gateway' ),
+				__( 'Your cart is empty.', 'deens-edge-payments-for-woocommerce' ),
 				array( 'status' => 409 )
 			);
 		}
@@ -125,7 +125,7 @@ final class WC_Edge_REST_Controller {
 		if ( ! $attempt ) {
 			return new WP_Error(
 				'edge_not_your_order',
-				__( 'Your checkout session could not be found. Please reload the page.', 'edge-gateway' ),
+				__( 'Your checkout session could not be found. Please reload the page.', 'deens-edge-payments-for-woocommerce' ),
 				array( 'status' => 403 )
 			);
 		}
@@ -154,7 +154,7 @@ final class WC_Edge_REST_Controller {
 			// minted for the guest they no longer are.
 			return new WP_Error(
 				'rest_cookie_invalid_nonce',
-				__( 'Your checkout session has expired. Please reload the page.', 'edge-gateway' ),
+				__( 'Your checkout session has expired. Please reload the page.', 'deens-edge-payments-for-woocommerce' ),
 				array( 'status' => 403 )
 			);
 		}
@@ -162,7 +162,7 @@ final class WC_Edge_REST_Controller {
 		if ( ! function_exists( 'WC' ) || ! WC()->session || ! WC()->session->get_customer_id() ) {
 			return new WP_Error(
 				'edge_no_session',
-				__( 'Your checkout session could not be found. Please reload the page.', 'edge-gateway' ),
+				__( 'Your checkout session could not be found. Please reload the page.', 'deens-edge-payments-for-woocommerce' ),
 				array( 'status' => 403 )
 			);
 		}
@@ -184,7 +184,7 @@ final class WC_Edge_REST_Controller {
 		if ( ! $gateway instanceof WC_Gateway_Edge || ! $gateway->is_available() ) {
 			return new WP_Error(
 				'edge_unavailable',
-				__( 'Card payments are not available for this order.', 'edge-gateway' ),
+				__( 'Card payments are not available for this order.', 'deens-edge-payments-for-woocommerce' ),
 				array( 'status' => 409 )
 			);
 		}
@@ -197,7 +197,7 @@ final class WC_Edge_REST_Controller {
 		if ( $in_flight instanceof WC_Order ) {
 			return new WP_Error(
 				'edge_payment_in_flight',
-				__( 'Your previous payment is still being processed. Please wait a moment.', 'edge-gateway' ),
+				__( 'Your previous payment is still being processed. Please wait a moment.', 'deens-edge-payments-for-woocommerce' ),
 				array(
 					'status'  => 409,
 					'orderId' => $in_flight->get_id(),
@@ -213,7 +213,7 @@ final class WC_Edge_REST_Controller {
 		if ( '' !== $claimed_hash && ! hash_equals( (string) WC()->cart->get_cart_hash(), $claimed_hash ) ) {
 			return new WP_Error(
 				'edge_cart_changed',
-				__( 'Your cart has changed. Please reload the page.', 'edge-gateway' ),
+				__( 'Your cart has changed. Please reload the page.', 'deens-edge-payments-for-woocommerce' ),
 				array( 'status' => 409 )
 			);
 		}
@@ -263,7 +263,7 @@ final class WC_Edge_REST_Controller {
 		if ( ! $gateway instanceof WC_Gateway_Edge ) {
 			return new WP_Error(
 				'edge_unavailable',
-				__( 'Card payments are not available for this order.', 'edge-gateway' ),
+				__( 'Card payments are not available for this order.', 'deens-edge-payments-for-woocommerce' ),
 				array( 'status' => 409 )
 			);
 		}
@@ -275,7 +275,7 @@ final class WC_Edge_REST_Controller {
 			|| '' === (string) $order->get_meta( '_edge_demand_id' ) ) {
 			return new WP_Error(
 				'edge_not_pending',
-				__( 'This order is not waiting on an Edge payment.', 'edge-gateway' ),
+				__( 'This order is not waiting on an Edge payment.', 'deens-edge-payments-for-woocommerce' ),
 				array( 'status' => 409 )
 			);
 		}

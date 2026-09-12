@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-PLUGIN_SLUG="edge-woocommerce"
+PLUGIN_SLUG="deens-edge-payments-for-woocommerce"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:-$ROOT/dist}"
 STAGE="$OUT/$PLUGIN_SLUG"
@@ -29,7 +29,7 @@ echo "==> Copying plugin sources"
 cp "$ROOT/edge-gateway.php" "$STAGE/edge-gateway.php"
 cp -R "$ROOT/includes" "$STAGE/includes"
 cp -R "$ROOT/assets" "$STAGE/assets"
-for f in readme.txt README.md LICENSE; do
+for f in readme.txt README.md LICENSE NOTICE.md; do
   [[ -f "$ROOT/$f" ]] && cp "$ROOT/$f" "$STAGE/$f"
 done
 [[ -d "$ROOT/languages" ]] && cp -R "$ROOT/languages" "$STAGE/languages"

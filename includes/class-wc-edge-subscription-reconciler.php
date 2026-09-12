@@ -2,7 +2,7 @@
 /**
  * Keeps this site's Edge webhook subscription in step with its settings.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.0.0
  */
 
@@ -134,7 +134,7 @@ final class WC_Edge_Subscription_Reconciler {
 		$mode = $gateway->get_mode();
 
 		if ( ! $mode || ! $gateway->has_valid_keys() ) {
-			return new WP_Error( 'edge_not_configured', __( 'Edge is not configured.', 'edge-gateway' ) );
+			return new WP_Error( 'edge_not_configured', __( 'Edge is not configured.', 'deens-edge-payments-for-woocommerce' ) );
 		}
 
 		$callback = self::callback_url();
@@ -142,7 +142,7 @@ final class WC_Edge_Subscription_Reconciler {
 		if ( ! self::is_deliverable( $callback ) ) {
 			return new WP_Error(
 				'edge_callback_unreachable',
-				__( 'Edge cannot deliver webhooks to a site that is not reachable from the internet.', 'edge-gateway' )
+				__( 'Edge cannot deliver webhooks to a site that is not reachable from the internet.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -341,7 +341,7 @@ final class WC_Edge_Subscription_Reconciler {
 		if ( '' === $secret ) {
 			return new WP_Error(
 				'edge_webhook_secret_missing',
-				__( 'Edge did not return the webhook signing secret.', 'edge-gateway' )
+				__( 'Edge did not return the webhook signing secret.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -382,7 +382,7 @@ final class WC_Edge_Subscription_Reconciler {
 		if ( '' === $secret ) {
 			return new WP_Error(
 				'edge_webhook_secret_missing',
-				__( 'Edge did not return the webhook signing secret.', 'edge-gateway' )
+				__( 'Edge did not return the webhook signing secret.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 

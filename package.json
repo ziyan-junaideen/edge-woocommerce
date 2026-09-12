@@ -1,10 +1,20 @@
 {
-  "name": "woocommerce-edge-gateway",
-  "title": "WooCommerce Edge Payments Gateway",
+  "name": "deens-edge-payments-for-woocommerce",
+  "title": "Deen's Edge Payments for WooCommerce",
   "version": "2.4.0",
-  "author": "Edge Payment Technologies",
-  "license": "GPL-3.0+",
-  "keywords": [],
+  "author": "Ziyan Junaideen <ziyan@jdeen.com> (https://www.jdeen.com)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ziyan-junaideen/edge-woocommerce.git"
+  },
+  "bugs": "https://github.com/ziyan-junaideen/edge-woocommerce/issues",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "woocommerce",
+    "payment-gateway",
+    "edge",
+    "wordpress-plugin"
+  ],
   "engines": {
     "node": ">=20.11.0"
   },
@@ -18,11 +28,11 @@
     "build": "wp-scripts build",
     "i18n": "npm run i18n:build",
     "i18n:build": "npm run i18n:pot && ./bin/build_i18n.sh",
-    "i18n:pot": "php -d xdebug.max_nesting_level=512 $(which wp) i18n make-pot --exclude=\"node_modules/,languages/,assets/\" --headers='{\"Report-Msgid-Bugs-To\":\"https://woocommerce.com/my-account/create-a-ticket/\", \"language-team\":\"LANGUAGE <EMAIL@ADDRESS>\"}' . languages/edge-gateway.pot",
+    "i18n:pot": "php -d xdebug.max_nesting_level=512 $(which wp) i18n make-pot --exclude=\"node_modules/,languages/,assets/\" --headers='{\"Report-Msgid-Bugs-To\":\"https://github.com/ziyan-junaideen/edge-woocommerce/issues\", \"language-team\":\"LANGUAGE <EMAIL@ADDRESS>\"}' . languages/deens-edge-payments-for-woocommerce.pot",
     "i18n:json": "$(which wp) i18n make-json languages --no-purge",
     "packages-update": "wp-scripts packages-update",
     "check-engines": "wp-scripts check-engines",
     "build:all": "wp-scripts build && npm run i18n:build"
   },
-  "description": "Edge Payments gateway for WooCommerce."
+  "description": "Accept Edge Payment Technologies payments in WooCommerce. Independent plugin, provided as is without warranty."
 }

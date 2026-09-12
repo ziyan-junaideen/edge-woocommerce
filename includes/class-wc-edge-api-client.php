@@ -2,7 +2,7 @@
 /**
  * The Edge JSON:API client.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.0.0
  */
 

@@ -2,7 +2,7 @@
 /**
  * Decides what an Edge payment state means for an order and for the shopper.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.4.0
  */
 
@@ -262,7 +262,7 @@ final class WC_Edge_Payment_Outcome {
 		$cvc2 = self::attribute( $attributes, 'cvc2_check' );
 
 		if ( in_array( $cvc2, self::NEGATIVE_CVC2_CHECKS, true ) ) {
-			return __( "Your bank declined this payment. Please check the card's security code, or try another card.", 'edge-gateway' );
+			return __( "Your bank declined this payment. Please check the card's security code, or try another card.", 'deens-edge-payments-for-woocommerce' );
 		}
 
 		$line1  = self::attribute( $attributes, 'address_line1_verification' );
@@ -270,10 +270,10 @@ final class WC_Edge_Payment_Outcome {
 
 		if ( in_array( $line1, self::NEGATIVE_ADDRESS_CHECKS, true )
 			|| in_array( $postal, self::NEGATIVE_ADDRESS_CHECKS, true ) ) {
-			return __( 'Your bank declined this payment. Please check that the billing address matches your card statement, or try another card.', 'edge-gateway' );
+			return __( 'Your bank declined this payment. Please check that the billing address matches your card statement, or try another card.', 'deens-edge-payments-for-woocommerce' );
 		}
 
-		return __( 'Your bank declined this payment. Please check the card details or try another card.', 'edge-gateway' );
+		return __( 'Your bank declined this payment. Please check the card details or try another card.', 'deens-edge-payments-for-woocommerce' );
 	}
 
 	/**

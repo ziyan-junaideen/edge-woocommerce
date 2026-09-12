@@ -1,6 +1,6 @@
 <?php
 /**
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  */
 
 namespace EdgePayments\EdgeWoocommerce\Tests\Unit;

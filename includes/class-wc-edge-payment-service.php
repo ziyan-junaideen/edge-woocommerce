@@ -2,7 +2,7 @@
 /**
  * Creates and binds the Edge resources a checkout needs.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.0.0
  */
 
@@ -251,7 +251,7 @@ final class WC_Edge_Payment_Service {
 
 			return new WP_Error(
 				'edge_binding_mismatch',
-				__( 'Your payment session no longer matches this order. Please reload and try again.', 'edge-gateway' )
+				__( 'Your payment session no longer matches this order. Please reload and try again.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -385,7 +385,7 @@ final class WC_Edge_Payment_Service {
 
 			return new WP_Error(
 				'edge_amount_mismatch',
-				__( 'Your order total changed. Please reload the checkout and try again.', 'edge-gateway' )
+				__( 'Your order total changed. Please reload the checkout and try again.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -408,7 +408,7 @@ final class WC_Edge_Payment_Service {
 		if ( ! self::has_confirmed_payment_method( $demand ) ) {
 			return new WP_Error(
 				'edge_card_not_verified',
-				__( 'Your card has not been verified yet. Please complete the card form and try again.', 'edge-gateway' )
+				__( 'Your card has not been verified yet. Please complete the card form and try again.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -559,7 +559,7 @@ final class WC_Edge_Payment_Service {
 		if ( 'failed' === $state ) {
 			return new WP_Error(
 				'edge_payment_failed',
-				__( 'Your payment was declined. Please try another card.', 'edge-gateway' )
+				__( 'Your payment was declined. Please try another card.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -734,7 +734,7 @@ final class WC_Edge_Payment_Service {
 
 		return sprintf(
 			/* translators: %s: comma separated list of checkout field names. */
-			__( 'Please check these details and try again: %s.', 'edge-gateway' ),
+			__( 'Please check these details and try again: %s.', 'deens-edge-payments-for-woocommerce' ),
 			implode( ', ', array_keys( $fields ) )
 		);
 	}
@@ -747,17 +747,17 @@ final class WC_Edge_Payment_Service {
 	 */
 	private static function field_from_pointer( $pointer ) {
 		$known = array(
-			'line_1'          => __( 'address', 'edge-gateway' ),
-			'line_2'          => __( 'address', 'edge-gateway' ),
-			'city'            => __( 'town or city', 'edge-gateway' ),
-			'state'           => __( 'state or county', 'edge-gateway' ),
-			'zip'             => __( 'postcode', 'edge-gateway' ),
-			'country'         => __( 'country', 'edge-gateway' ),
-			'email'           => __( 'email address', 'edge-gateway' ),
-			'name'            => __( 'name', 'edge-gateway' ),
-			'phone_number'    => __( 'phone number', 'edge-gateway' ),
-			'amount_cents'    => __( 'order total', 'edge-gateway' ),
-			'amount_currency' => __( 'currency', 'edge-gateway' ),
+			'line_1'          => __( 'address', 'deens-edge-payments-for-woocommerce' ),
+			'line_2'          => __( 'address', 'deens-edge-payments-for-woocommerce' ),
+			'city'            => __( 'town or city', 'deens-edge-payments-for-woocommerce' ),
+			'state'           => __( 'state or county', 'deens-edge-payments-for-woocommerce' ),
+			'zip'             => __( 'postcode', 'deens-edge-payments-for-woocommerce' ),
+			'country'         => __( 'country', 'deens-edge-payments-for-woocommerce' ),
+			'email'           => __( 'email address', 'deens-edge-payments-for-woocommerce' ),
+			'name'            => __( 'name', 'deens-edge-payments-for-woocommerce' ),
+			'phone_number'    => __( 'phone number', 'deens-edge-payments-for-woocommerce' ),
+			'amount_cents'    => __( 'order total', 'deens-edge-payments-for-woocommerce' ),
+			'amount_currency' => __( 'currency', 'deens-edge-payments-for-woocommerce' ),
 		);
 
 		$leaf = basename( (string) $pointer );
@@ -771,7 +771,7 @@ final class WC_Edge_Payment_Service {
 	 * @return string
 	 */
 	private static function generic_failure() {
-		return __( 'We could not start your card payment. Please try again in a moment.', 'edge-gateway' );
+		return __( 'We could not start your card payment. Please try again in a moment.', 'deens-edge-payments-for-woocommerce' );
 	}
 
 	/**
@@ -785,7 +785,7 @@ final class WC_Edge_Payment_Service {
 	 */
 	private static function collect_facts( WC_Gateway_Edge $gateway ) {
 		if ( ! function_exists( 'WC' ) || ! WC()->cart || WC()->cart->is_empty() ) {
-			return new WP_Error( 'edge_cart_empty', __( 'Your cart is empty.', 'edge-gateway' ) );
+			return new WP_Error( 'edge_cart_empty', __( 'Your cart is empty.', 'deens-edge-payments-for-woocommerce' ) );
 		}
 
 		if ( ! WC()->session || ! WC()->session->get_customer_id() ) {
@@ -797,7 +797,7 @@ final class WC_Edge_Payment_Service {
 		if ( ! WC_Edge_Money::is_supported_currency( $currency ) ) {
 			return new WP_Error(
 				'edge_currency_unsupported',
-				__( 'Card payments are only available for orders in US dollars.', 'edge-gateway' )
+				__( 'Card payments are only available for orders in US dollars.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -812,7 +812,7 @@ final class WC_Edge_Payment_Service {
 		if ( ! WC_Edge_Money::is_chargeable( $amount_cents ) ) {
 			return new WP_Error(
 				'edge_amount_too_small',
-				__( 'This order is below the minimum for card payments.', 'edge-gateway' )
+				__( 'This order is below the minimum for card payments.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -841,7 +841,7 @@ final class WC_Edge_Payment_Service {
 		if ( '' === trim( (string) $email ) ) {
 			return new WP_Error(
 				'edge_email_required',
-				__( 'Please enter your email address before paying.', 'edge-gateway' )
+				__( 'Please enter your email address before paying.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -893,7 +893,7 @@ final class WC_Edge_Payment_Service {
 				&& $shipping !== $billing,
 			'description'           => sprintf(
 				/* translators: %s: site name. */
-				__( '%s order', 'edge-gateway' ),
+				__( '%s order', 'deens-edge-payments-for-woocommerce' ),
 				wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES )
 			),
 		);

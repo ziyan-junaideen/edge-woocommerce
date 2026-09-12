@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
-<ruleset name="Edge WooCommerce Gateway">
-	<description>Coding standards for the Edge Payments gateway.</description>
+<ruleset name="Deens Edge Payments for WooCommerce">
+	<description>Coding standards for Deen's Edge Payments for WooCommerce.</description>
 
 	<file>edge-gateway.php</file>
 	<file>includes</file>
@@ -33,7 +33,7 @@
 
 	<rule ref="WordPress.WP.I18n">
 		<properties>
-			<property name="text_domain" type="array" value="edge-gateway"/>
+			<property name="text_domain" type="array" value="deens-edge-payments-for-woocommerce"/>
 		</properties>
 	</rule>
 </ruleset>

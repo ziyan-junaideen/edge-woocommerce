@@ -2,7 +2,7 @@
 /**
  * Builds the JSON:API documents Edge expects.
  *
- * @package WooCommerce Edge Payments Gateway
+ * @package Deens_Edge_Payments_For_WooCommerce
  * @since   2.0.0
  */
 
@@ -110,7 +110,7 @@ final class WC_Edge_Order_Mapper {
 			if ( '' === $attributes[ $required ] ) {
 				return new WP_Error(
 					'edge_address_incomplete',
-					__( 'Please complete your billing address before paying.', 'edge-gateway' ),
+					__( 'Please complete your billing address before paying.', 'deens-edge-payments-for-woocommerce' ),
 					array( 'field' => $required )
 				);
 			}
@@ -447,7 +447,7 @@ final class WC_Edge_Order_Mapper {
 		if ( '' === $alpha2 ) {
 			return new WP_Error(
 				'edge_country_missing',
-				__( 'Please choose a billing country before paying.', 'edge-gateway' )
+				__( 'Please choose a billing country before paying.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
@@ -462,7 +462,7 @@ final class WC_Edge_Order_Mapper {
 			// An unknown country must surface as a checkout validation message.
 			return new WP_Error(
 				'edge_country_unsupported',
-				__( 'That billing country is not supported for card payments.', 'edge-gateway' ),
+				__( 'That billing country is not supported for card payments.', 'deens-edge-payments-for-woocommerce' ),
 				array( 'country' => $alpha2 )
 			);
 		}

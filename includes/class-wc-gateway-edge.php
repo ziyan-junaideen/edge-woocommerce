@@ -2,7 +2,7 @@
 /**
  * WC_Gateway_Edge class
  *
- * @package  WooCommerce Edge Payments Gateway
+ * @package  Deens_Edge_Payments_For_WooCommerce
  * @since    1.0.0
  */
 
@@ -89,8 +89,8 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 		// idempotent so a retry cannot pay twice.
 		$this->supports = array( 'products', 'refunds' );
 
-		$this->method_title       = _x( 'Edge Payments', 'Edge payments method', 'edge-gateway' );
-		$this->method_description = __( 'Accept card payments through Edge. Requires the block-based checkout.', 'edge-gateway' );
+		$this->method_title       = _x( 'Edge Payments', 'Edge payments method', 'deens-edge-payments-for-woocommerce' );
+		$this->method_description = __( 'Accept card payments through Edge. Requires the block-based checkout.', 'deens-edge-payments-for-woocommerce' );
 
 		// Load the settings.
 		$this->init_form_fields();
@@ -119,40 +119,40 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 
 		$this->form_fields = array(
 			'enabled'         => array(
-				'title'   => __( 'Enable/Disable', 'edge-gateway' ),
-				'label'   => __( 'Enable Edge Payments', 'edge-gateway' ),
+				'title'   => __( 'Enable/Disable', 'deens-edge-payments-for-woocommerce' ),
+				'label'   => __( 'Enable Edge Payments', 'deens-edge-payments-for-woocommerce' ),
 				'type'    => 'checkbox',
 				'default' => 'no',
 			),
 			'title'           => array(
-				'title'       => __( 'Title', 'edge-gateway' ),
+				'title'       => __( 'Title', 'deens-edge-payments-for-woocommerce' ),
 				'type'        => 'text',
-				'description' => __( 'This controls the title which the user sees during checkout.', 'edge-gateway' ),
-				'default'     => __( 'Credit Card', 'edge-gateway' ),
+				'description' => __( 'This controls the title which the user sees during checkout.', 'deens-edge-payments-for-woocommerce' ),
+				'default'     => __( 'Credit Card', 'deens-edge-payments-for-woocommerce' ),
 				'desc_tip'    => true,
 			),
 			'description'     => array(
-				'title'       => __( 'Description', 'edge-gateway' ),
+				'title'       => __( 'Description', 'deens-edge-payments-for-woocommerce' ),
 				'type'        => 'textarea',
-				'description' => __( 'This controls the description which the user sees during checkout.', 'edge-gateway' ),
-				'default'     => __( 'Pay securely with your card.', 'edge-gateway' ),
+				'description' => __( 'This controls the description which the user sees during checkout.', 'deens-edge-payments-for-woocommerce' ),
+				'default'     => __( 'Pay securely with your card.', 'deens-edge-payments-for-woocommerce' ),
 			),
 			'publishable_key' => array(
-				'title'       => __( 'Publishable key', 'edge-gateway' ),
+				'title'       => __( 'Publishable key', 'deens-edge-payments-for-woocommerce' ),
 				'type'        => 'text',
 				/* translators: %s: example key prefix. */
-				'description' => sprintf( __( 'Browser-safe key, starting %s. Sandbox or live is determined by this prefix.', 'edge-gateway' ), '<code>ept_live_b</code>' ),
+				'description' => sprintf( __( 'Browser-safe key, starting %s. Sandbox or live is determined by this prefix.', 'deens-edge-payments-for-woocommerce' ), '<code>ept_live_b</code>' ),
 			),
 			'secret_key'      => array(
-				'title'       => __( 'Secret key', 'edge-gateway' ),
+				'title'       => __( 'Secret key', 'deens-edge-payments-for-woocommerce' ),
 				'type'        => 'password',
 				/* translators: %s: example key prefix. */
-				'description' => sprintf( __( 'Server-only key, starting %s. Never shared with the browser.', 'edge-gateway' ), '<code>ept_live_s</code>' ),
+				'description' => sprintf( __( 'Server-only key, starting %s. Never shared with the browser.', 'deens-edge-payments-for-woocommerce' ), '<code>ept_live_s</code>' ),
 			),
 			'webhook_secret'  => array(
-				'title'       => __( 'Webhook signing secret', 'edge-gateway' ),
+				'title'       => __( 'Webhook signing secret', 'deens-edge-payments-for-woocommerce' ),
 				'type'        => 'password',
-				'description' => __( 'Leave blank if your API key can manage webhook subscriptions - the gateway registers its own and stores the secret automatically. Fill this in only if you created the subscription in the Edge dashboard yourself, and paste the secret Edge generated for it. Orders stay on hold until a webhook can be verified.', 'edge-gateway' ),
+				'description' => __( 'Leave blank if your API key can manage webhook subscriptions - the gateway registers its own and stores the secret automatically. Fill this in only if you created the subscription in the Edge dashboard yourself, and paste the secret Edge generated for it. Orders stay on hold until a webhook can be verified.', 'deens-edge-payments-for-woocommerce' ),
 			),
 		);
 	}
@@ -205,7 +205,7 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 		$result = WC_Edge_Subscription_Reconciler::reconcile( $gateway );
 
 		if ( ! is_wp_error( $result ) ) {
-			WC_Admin_Settings::add_message( __( 'Edge Payments: webhooks are registered.', 'edge-gateway' ) );
+			WC_Admin_Settings::add_message( __( 'Edge Payments: webhooks are registered.', 'deens-edge-payments-for-woocommerce' ) );
 
 			return;
 		}
@@ -223,14 +223,14 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 		if ( 403 === $status || false !== stripos( $result->get_error_message(), 'forbidden' ) ) {
 			if ( '' !== trim( (string) $this->get_option( 'webhook_secret' ) ) ) {
 				WC_Admin_Settings::add_message(
-					__( 'Edge Payments: settings saved. Using the webhook signing secret you supplied, since this API key cannot manage webhook subscriptions.', 'edge-gateway' )
+					__( 'Edge Payments: settings saved. Using the webhook signing secret you supplied, since this API key cannot manage webhook subscriptions.', 'deens-edge-payments-for-woocommerce' )
 				);
 
 				return;
 			}
 
 			WC_Admin_Settings::add_error(
-				__( 'Edge Payments: this API key is not permitted to manage webhook subscriptions, so the gateway could not register its own. Create a webhook in the Edge dashboard pointing at this site and paste its signing secret into "Webhook signing secret", or ask Edge to grant the key the developer.webhook_subscriptions permission. Until then orders will stay on hold.', 'edge-gateway' )
+				__( 'Edge Payments: this API key is not permitted to manage webhook subscriptions, so the gateway could not register its own. Create a webhook in the Edge dashboard pointing at this site and paste its signing secret into "Webhook signing secret", or ask Edge to grant the key the developer.webhook_subscriptions permission. Until then orders will stay on hold.', 'deens-edge-payments-for-woocommerce' )
 			);
 
 			return;
@@ -239,7 +239,7 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 		if ( 'edge_callback_unreachable' === $result->get_error_code() ) {
 			// Expected on a local site; not a misconfiguration to shout about.
 			WC_Admin_Settings::add_message(
-				__( 'Edge Payments: settings saved. Webhooks were not registered because this site is not reachable from the internet, so orders will stay on hold until it is.', 'edge-gateway' )
+				__( 'Edge Payments: settings saved. Webhooks were not registered because this site is not reachable from the internet, so orders will stay on hold until it is.', 'deens-edge-payments-for-woocommerce' )
 			);
 
 			return;
@@ -248,7 +248,7 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 		WC_Admin_Settings::add_error(
 			sprintf(
 				/* translators: %s: error detail. */
-				__( 'Edge Payments: webhooks could not be registered, so orders will not complete automatically. %s', 'edge-gateway' ),
+				__( 'Edge Payments: webhooks could not be registered, so orders will not complete automatically. %s', 'deens-edge-payments-for-woocommerce' ),
 				$result->get_error_message()
 			)
 		);
@@ -263,28 +263,28 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 	private static function describe_key_error( $code ) {
 		switch ( $code ) {
 			case 'missing_secret_key':
-				return __( 'Edge Payments: a secret key is required.', 'edge-gateway' );
+				return __( 'Edge Payments: a secret key is required.', 'deens-edge-payments-for-woocommerce' );
 
 			case 'missing_publishable_key':
-				return __( 'Edge Payments: a publishable key is required.', 'edge-gateway' );
+				return __( 'Edge Payments: a publishable key is required.', 'deens-edge-payments-for-woocommerce' );
 
 			case 'malformed_secret_key':
-				return __( 'Edge Payments: that secret key is not in the expected format.', 'edge-gateway' );
+				return __( 'Edge Payments: that secret key is not in the expected format.', 'deens-edge-payments-for-woocommerce' );
 
 			case 'malformed_publishable_key':
-				return __( 'Edge Payments: that publishable key is not in the expected format.', 'edge-gateway' );
+				return __( 'Edge Payments: that publishable key is not in the expected format.', 'deens-edge-payments-for-woocommerce' );
 
 			case 'secret_field_holds_publishable_key':
-				return __( 'Edge Payments: the secret key field contains a publishable key. Check the two fields are not swapped.', 'edge-gateway' );
+				return __( 'Edge Payments: the secret key field contains a publishable key. Check the two fields are not swapped.', 'deens-edge-payments-for-woocommerce' );
 
 			case 'publishable_field_holds_secret_key':
-				return __( 'Edge Payments: the publishable key field contains a secret key. This key would be exposed to the browser, so it has not been accepted.', 'edge-gateway' );
+				return __( 'Edge Payments: the publishable key field contains a secret key. This key would be exposed to the browser, so it has not been accepted.', 'deens-edge-payments-for-woocommerce' );
 
 			case 'mode_mismatch':
-				return __( 'Edge Payments: one key is live and the other is sandbox. Both keys must be from the same mode.', 'edge-gateway' );
+				return __( 'Edge Payments: one key is live and the other is sandbox. Both keys must be from the same mode.', 'deens-edge-payments-for-woocommerce' );
 
 			default:
-				return __( 'Edge Payments: the API keys could not be validated.', 'edge-gateway' );
+				return __( 'Edge Payments: the API keys could not be validated.', 'deens-edge-payments-for-woocommerce' );
 		}
 	}
 
@@ -469,14 +469,14 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 		$order = wc_get_order( $order_id );
 
 		if ( ! $order instanceof WC_Order ) {
-			return $this->fail( __( 'That order could not be found.', 'edge-gateway' ) );
+			return $this->fail( __( 'That order could not be found.', 'deens-edge-payments-for-woocommerce' ) );
 		}
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- The Store API authenticates this request; this value is cross-checked against server-held order meta and never trusted on its own.
 		$submitted = isset( $_POST['edge_demand_id'] ) ? sanitize_text_field( wp_unslash( $_POST['edge_demand_id'] ) ) : '';
 
 		if ( '' !== $submitted && ! self::is_uuid( $submitted ) ) {
-			return $this->fail( __( 'That payment reference is not valid.', 'edge-gateway' ) );
+			return $this->fail( __( 'That payment reference is not valid.', 'deens-edge-payments-for-woocommerce' ) );
 		}
 
 		// Confirm and the status write that follows it are one step as far as
@@ -494,7 +494,7 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 			$lock_owner = $this->take_demand_lock( $bound_demand_id );
 
 			if ( false === $lock_owner ) {
-				return $this->fail( __( 'Your payment is still being processed. Please wait a moment and try again.', 'edge-gateway' ) );
+				return $this->fail( __( 'Your payment is still being processed. Please wait a moment and try again.', 'deens-edge-payments-for-woocommerce' ) );
 			}
 		}
 
@@ -511,7 +511,7 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 					// no-change against the `pending` order Blocks left behind, and
 					// the merchant is left with an order that looks abandoned. Same
 					// wording as WC_Edge_Order_Sync, because it is the same news.
-					$order->update_status( 'failed', __( 'Edge declined this payment.', 'edge-gateway' ) );
+					$order->update_status( 'failed', __( 'Edge declined this payment.', 'deens-edge-payments-for-woocommerce' ) );
 				}
 
 				return $this->fail( $confirmed->get_error_message() );
@@ -534,7 +534,7 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 				// The same demand, confirmed again after the bank said no. Worth
 				// saying on the order, because the attempts are otherwise
 				// indistinguishable.
-				$order->add_order_note( __( 'Retrying the payment with Edge after a decline.', 'edge-gateway' ) );
+				$order->add_order_note( __( 'Retrying the payment with Edge after a decline.', 'deens-edge-payments-for-woocommerce' ) );
 			}
 
 			$order->set_transaction_id( $demand_id );
@@ -547,7 +547,7 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 			if ( ! $order->is_paid() ) {
 				$order->update_status(
 					'on-hold',
-					__( 'Awaiting confirmation from Edge.', 'edge-gateway' )
+					__( 'Awaiting confirmation from Edge.', 'deens-edge-payments-for-woocommerce' )
 				);
 			}
 
@@ -624,7 +624,7 @@ class WC_Gateway_Edge extends WC_Payment_Gateway {
 		if ( ! $order instanceof WC_Order ) {
 			return new WP_Error(
 				'edge_order_missing',
-				__( 'That order could not be found.', 'edge-gateway' )
+				__( 'That order could not be found.', 'deens-edge-payments-for-woocommerce' )
 			);
 		}
 
